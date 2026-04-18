@@ -24,9 +24,9 @@ const { useState, useEffect, useRef, useCallback } = React;
    SUPABASE CONFIG — Fill in your project details
    Get these from: supabase.com → Project Settings → API
 ══════════════════════════════════════════════════════ */
-const SUPABASE_URL  = localStorage.getItem("jamat_sb_url") || "https://YOUR_PROJECT_ID.supabase.co";
-const SUPABASE_KEY  = localStorage.getItem("jamat_sb_key") || "YOUR_ANON_PUBLIC_KEY";
-const BACKEND_READY = !!(localStorage.getItem("jamat_sb_key") && localStorage.getItem("jamat_sb_url") && localStorage.getItem("jamat_sb_url") !== "https://YOUR_PROJECT_ID.supabase.co");
+const SUPABASE_URL  = localStorage.getItem("jamat_sb_url") || "https://xpkfagerukqbvzgpqsmj.supabase.co";
+const SUPABASE_KEY  = localStorage.getItem("jamat_sb_key") || "sb_publishable_2Bxsg16faQp66irCSUolzw_rzOdOWlX";
+const BACKEND_READY = true;
 
 const _sb = BACKEND_READY
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
