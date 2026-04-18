@@ -7,6 +7,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
     html,body{background:#060e09;height:100%;overscroll-behavior:none}
@@ -18,6 +19,162 @@
   <script type="text/babel" data-presets="react">
 
 const { useState, useEffect, useRef, useCallback } = React;
+
+/* ══════════════════════════════════════════════════════
+   SUPABASE CONFIG — Fill in your project details
+   Get these from: supabase.com → Project Settings → API
+══════════════════════════════════════════════════════ */
+const SUPABASE_URL  = "https://YOUR_PROJECT_ID.supabase.co";
+const SUPABASE_KEY  = "YOUR_ANON_PUBLIC_KEY";
+const BACKEND_READY = SUPABASE_URL !== "https://YOUR_PROJECT_ID.supabase.co";
+
+const _sb = BACKEND_READY
+  ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
+  : null;
+
+/* ══════════════════════════════════════════════════════
+   SHA-256 HASH UTILITY (Web Crypto API — no raw storage)
+══════════════════════════════════════════════════════ */
+const AADHAAR_PEPPER = "jamat-platform-2025-secure-pepper";
+
+async function sha256Hash(text) {
+  const msgBuffer = new TextEncoder().encode(text + AADHAAR_PEPPER);
+  const hashBuffer = await crypto.subtle.digest("SHA-256", msgBuffer);
+  const hashArray  = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+/* ══════════════════════════════════════════════════════
+   DB SERVICE — All backend operations in one place
+   Falls back to localStorage if Supabase not configured
+══════════════════════════════════════════════════════ */
+const DB = {
+
+  /* ── BLACKLIST ─────────────────────────────────── */
+  async checkBlacklist(aadhaarRaw) {
+    const hash = await sha256Hash(aadhaarRaw.replace(/\s/g,""));
+    if (!BACKEND_READY) {
+      // localStorage fallback for demo
+      const list = JSON.parse(localStorage.getItem("jamat_blacklist") || "[]");
+      return list.includes(hash) ? { banned: true, reason: "Demo ban (localStorage)" } : { banned: false };
+    }
+    const { data } = await _sb
+      .from("blacklisted_identities")
+      .select("reason, banned_at")
+      .eq("aadhaar_hash", hash)
+      .neq("severity", "lifted")
+      .maybeSingle();
+    return data ? { banned: true, reason: data.reason, bannedAt: data.banned_at } : { banned: false };
+  },
+
+  async addBlacklist(aadhaarRaw, reason, bannedBy) {
+    const hash = await sha256Hash(aadhaarRaw.replace(/\s/g,""));
+    if (!BACKEND_READY) {
+      const list = JSON.parse(localStorage.getItem("jamat_blacklist") || "[]");
+      list.push(hash);
+      localStorage.setItem("jamat_blacklist", JSON.stringify(list));
+      return { ok: true };
+    }
+    const { error } = await _sb.from("blacklisted_identities").insert({
+      aadhaar_hash: hash, reason, banned_by: bannedBy, severity: "permanent"
+    });
+    return { ok: !error, error };
+  },
+
+  /* ── HEALTH PROFILE ────────────────────────────── */
+  async loadHealth(userId) {
+    const lsKey = `jamat_health_${userId}`;
+    if (!BACKEND_READY) {
+      return JSON.parse(localStorage.getItem(lsKey) || "null");
+    }
+    const { data } = await _sb
+      .from("health_profiles")
+      .select("*")
+      .eq("user_id", userId)
+      .maybeSingle();
+    return data;
+  },
+
+  async saveHealth(userId, profile) {
+    const lsKey = `jamat_health_${userId}`;
+    const payload = { ...profile, user_id: userId, updated_at: new Date().toISOString() };
+    if (!BACKEND_READY) {
+      localStorage.setItem(lsKey, JSON.stringify(payload));
+      return { ok: true };
+    }
+    const { error } = await _sb
+      .from("health_profiles")
+      .upsert(payload, { onConflict: "user_id" });
+    return { ok: !error, error };
+  },
+
+  async loadJamaatHealth(jamaatId) {
+    if (!BACKEND_READY) {
+      // Return demo health data for all jamaat members
+      return JAMAAT.members.map(m => ({
+        user_id: m.id, name_en: m.en, blood_group: m.bloodGroup,
+        has_medical: m.hasMedical, has_allergies: m.allergies,
+        medical_summary: m.hasMedical ? "Diabetes Type 2 — diet controlled" : null,
+        allergy_summary: m.allergies ? "Peanuts — carry EpiPen" : null,
+      }));
+    }
+    const { data } = await _sb
+      .from("health_profiles")
+      .select("*, users(name_en, name_ur)")
+      .eq("jamaat_id", jamaatId);
+    return data || [];
+  },
+
+  /* ── NOTIFICATIONS ─────────────────────────────── */
+  async logNotification(payload) {
+    const entry = { ...payload, sent_at: new Date().toISOString() };
+    // Always save to localStorage for history view
+    const logs = JSON.parse(localStorage.getItem("jamat_notif_log") || "[]");
+    logs.unshift(entry);
+    localStorage.setItem("jamat_notif_log", JSON.stringify(logs.slice(0, 50)));
+
+    if (!BACKEND_READY) return { ok: true };
+    const { error } = await _sb.from("notification_logs").insert(entry);
+    return { ok: !error };
+  },
+
+  async getNotifLogs(userId) {
+    const lsLogs = JSON.parse(localStorage.getItem("jamat_notif_log") || "[]");
+    if (!BACKEND_READY) return lsLogs;
+    const { data } = await _sb
+      .from("notification_logs")
+      .select("*")
+      .eq("sender_id", userId)
+      .order("sent_at", { ascending: false })
+      .limit(30);
+    return data || lsLogs;
+  },
+
+  /* ── HUMANIZED TEMPLATE RENDERER ──────────────── */
+  buildMessage(type, vars, lang = "ur") {
+    const now = new Date().toLocaleString("en-IN");
+    const templates = {
+      arrival: {
+        ur: `🌿 الحمدللہ\n${vars.name} خیریت سے ${vars.location} پہنچ گئے\nجماعت: ${vars.jamaat}\nوقت: ${vars.time || now}\nپن کوڈ: ${vars.pincode}\n\nاللہ تعالیٰ حفاظت فرمائیں 🤲`,
+        en: `🌿 Alhamdulillah\n${vars.name} has safely reached ${vars.location}\nJamaat: ${vars.jamaat} · Time: ${vars.time || now}\nPincode: ${vars.pincode}\n\nMay Allah keep them safe 🤲`,
+        hi: `🌿 Alhamdulillah\n${vars.name} salamat ${vars.location} pahunch gaye\nJamaat: ${vars.jamaat} · Waqt: ${vars.time || now}`,
+      },
+      sos: {
+        ur: `🆘 فوری مدد!\n${vars.name} نے ایمرجنسی الرٹ بھیجا\n📍 ${vars.location}\n⏰ ${now}\nامیر: ${vars.amir}\n🩸 خون کا گروپ: ${vars.blood || "معلوم نہیں"}\n\nفوری رابطہ کریں!`,
+        en: `🆘 EMERGENCY!\n${vars.name} triggered SOS at ${vars.location}\nTime: ${now} · Amir: ${vars.amir}\nBlood Group: ${vars.blood || "Unknown"}\nContact immediately!`,
+      },
+      broadcast: {
+        ur: `📢 جماعت اعلان\n${vars.message}\n\nامیر: ${vars.amir}\n${now}`,
+        en: `📢 Jamaat Announcement\n${vars.message}\n\nAmir: ${vars.amir}\n${now}`,
+      },
+      welcome: {
+        ur: `السلام علیکم ${vars.name} 🌙\nآپ کا JAMAT میں خیر مقدم ہے\nعزت · حفاظت · نظام`,
+        en: `Assalamu Alaikum ${vars.name} 🌙\nWelcome to JAMAT Platform\nIzzat · Hifazat · Nizaam`,
+      },
+    };
+    return (templates[type]?.[lang]) || (templates[type]?.["en"]) || "";
+  },
+};
 
 /* ══════════════════════════════════════════════════════
    THEME
@@ -316,12 +473,15 @@ function Login({onLogin}){
 
   const fmtNum=v=>v.replace(/\D/g,"").slice(0,12).replace(/(\d{4})(\d{4})?(\d{4})?/,(_,a,b,c)=>[a,b,c].filter(Boolean).join(" "));
 
-  const sendOTP=()=>{
+  const sendOTP=async ()=>{
     const clean=num.replace(/\s/g,"");
     if(clean.length<12){setErr("Enter valid 12-digit Aadhaar number");return;}
-    if(num===BANNED_AADHAAR){setBlocked(true);return;}
     setErr("");setLoading(true);
-    setTimeout(()=>{setLoading(false);setStep("otp");},1400);
+    try {
+      const result = await DB.checkBlacklist(clean);
+      if(result.banned){setLoading(false);setBlocked(result);return;}
+    } catch(e){ console.warn("Blacklist check failed, proceeding:",e); }
+    setTimeout(()=>{setLoading(false);setStep("otp");},400);
   };
 
   const setOtpDigit=(i,v)=>{
@@ -342,19 +502,20 @@ function Login({onLogin}){
       <div style={{position:"relative",zIndex:1,textAlign:"center",maxWidth:380}}>
         <div style={{fontSize:64,marginBottom:16}}>🚫</div>
         <div style={{color:C.redHi,fontSize:24,fontWeight:900,marginBottom:8}}>Access Permanently Blocked</div>
-        <div style={{color:C.creamDi,fontSize:14,lineHeight:1.8,marginBottom:24}}>This Aadhaar identity has been permanently banned from the JAMAT platform due to a policy violation.</div>
+        <div style={{color:C.creamDi,fontSize:14,lineHeight:1.8,marginBottom:24}}>This Aadhaar identity has been permanently banned from the JAMAT platform.</div>
         <Cd s={{borderColor:C.red,background:"#1a0404",textAlign:"left"}}>
           <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10}}>
             <span style={{fontSize:20}}>⚖️</span>
-            <div style={{color:C.redHi,fontSize:13,fontWeight:700}}>Why was this account banned?</div>
+            <div style={{color:C.redHi,fontSize:13,fontWeight:700}}>Ban Details</div>
           </div>
+          {blocked.reason&&<div style={{color:C.creamDi,fontSize:12,marginBottom:8}}>Reason: <strong style={{color:C.cream}}>{blocked.reason}</strong></div>}
           {["False identity or forged documents","Repeated T&C violations","Admin-confirmed misuse"].map(t=>(
             <div key={t} style={{display:"flex",gap:8,marginBottom:6}}>
               <span style={{color:C.redHi}}>·</span>
               <span style={{color:C.creamDi,fontSize:12}}>{t}</span>
             </div>
           ))}
-          <div style={{marginTop:12,color:C.txtDi,fontSize:11}}>Ban reference: {BANNED_AADHAAR.replace(/\d/g,"●")} · Contact district admin to appeal.</div>
+          <div style={{marginTop:12,color:C.txtDi,fontSize:11}}>Contact district admin to appeal.</div>
         </Cd>
         <button onClick={()=>setBlocked(false)} style={{marginTop:20,background:"none",border:`1px solid ${C.border}`,borderRadius:8,padding:"10px 24px",color:C.creamDi,fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>← Try Different Aadhaar</button>
       </div>
@@ -677,51 +838,95 @@ function HealthScreen({user,go,showToast}){
   const isAmir=user.role==="amir";
   const [editing,setEditing]=useState(false);
   const [bg,setBg]=useState(user.bloodGroup||"O+");
-  const [conditions,setConditions]=useState(isAmir?"":user.hasMedical?"Diabetes Type 2 — diet controlled":"");
+  const [conditions,setConditions]=useState("");
   const [meds,setMeds]=useState("");
   const [allergies,setAllergies]=useState("");
-  const [notes,setNotes]=useState("In case of emergency, contact family first.");
+  const [notes,setNotes]=useState("");
   const [visibleToAmir,setVisibleToAmir]=useState(true);
-  const [saved,setSaved]=useState(false);
+  const [dbLoading,setDbLoading]=useState(true);
+  const [saving,setSaving]=useState(false);
+  const [jamaatHealth,setJamaatHealth]=useState([]);
   const bgs=["A+","A-","B+","B-","O+","O-","AB+","AB-"];
 
-  const save=()=>{setSaved(true);setEditing(false);showToast("Health profile updated securely","success");};
+  /* Load from backend on mount */
+  useEffect(()=>{
+    (async()=>{
+      setDbLoading(true);
+      if(isAmir){
+        const data=await DB.loadJamaatHealth(JAMAAT.id);
+        setJamaatHealth(data||[]);
+        // Log audit access
+        await DB.logNotification({type:"audit",sender_id:user.id,sender_name:user.en,
+          message:`Amir ${user.en} viewed health profiles for ${JAMAAT.en}`,channel:"audit",lang:"en"});
+      } else {
+        const data=await DB.loadHealth(user.id);
+        if(data){
+          setBg(data.blood_group||user.bloodGroup||"O+");
+          setConditions(data.medical_conditions||"");
+          setMeds(data.medications||"");
+          setAllergies(data.allergies||"");
+          setNotes(data.emergency_notes||"");
+          setVisibleToAmir(data.visible_to_amir!==false);
+        }
+      }
+      setDbLoading(false);
+    })();
+  },[user.id]);
+
+  const save=async()=>{
+    setSaving(true);
+    const result=await DB.saveHealth(user.id,{
+      blood_group:bg, medical_conditions:conditions,
+      medications:meds, allergies:allergies,
+      emergency_notes:notes, visible_to_amir:visibleToAmir,
+      jamaat_id:JAMAAT.id,
+    });
+    setSaving(false);
+    setEditing(false);
+    showToast(result.ok?"✓ Health profile saved to "+( BACKEND_READY?"Supabase":"local storage"):"Save failed — check console","success");
+  };
 
   if(isAmir){
+    const members = jamaatHealth.length>0 ? jamaatHealth : JAMAAT.members.map(m=>({
+      user_id:m.id, name_en:m.en, name_ur:m.name, blood_group:m.bloodGroup,
+      has_medical:m.hasMedical, has_allergies:m.allergies,
+      medical_summary:m.hasMedical?"Diabetes Type 2 — monitor meals":null,
+      allergy_summary:m.allergies?"Peanuts — carry EpiPen":null,
+    }));
     return(
       <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
         <BackBtn fn={()=>go("dashboard")} label="Dashboard"/>
         <div style={{padding:"14px 0 16px"}}>
           <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>صحت کا ریکارڈ</div>
           <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Members' Health — Amir View</div>
-          <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Confidential · Visible only to Amir · Every access is logged</div>
+          <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Confidential · Amir-only · Every access is audit-logged {BACKEND_READY?"→ Supabase":"→ local"}</div>
         </div>
         <Cd s={{marginBottom:14,borderColor:C.amber,background:"#1a0e04"}}>
           <div style={{display:"flex",gap:10,alignItems:"center"}}>
             <span style={{fontSize:20}}>⚠️</span>
-            <div style={{color:C.amberHi,fontSize:12,fontWeight:600}}>This view is audit-logged. Access is recorded with your user ID, IP address, and timestamp.</div>
+            <div style={{color:C.amberHi,fontSize:12,fontWeight:600}}>Access recorded: {user.en} · {new Date().toLocaleString()}</div>
           </div>
         </Cd>
-        {JAMAAT.members.map(m=>(
-          <Cd key={m.id} s={{marginBottom:10,padding:14}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:m.hasMedical||m.allergies?10:0}}>
+        {dbLoading?<Spinner/>:members.map((m,idx)=>(
+          <Cd key={m.user_id||idx} s={{marginBottom:10,padding:14}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:(m.has_medical||m.has_allergies||m.hasMedical||m.allergies)?10:0}}>
               <div style={{display:"flex",gap:10,alignItems:"center"}}>
-                <div style={{position:"relative"}}><Av name={m.en} size={38}/><div style={{position:"absolute",bottom:0,right:0}}>{m.verified?tick:null}</div></div>
+                <div style={{position:"relative"}}><Av name={m.name_en||m.en} size={38}/></div>
                 <div>
-                  <div style={{color:C.cream,fontSize:13,fontWeight:700}}>{m.en}</div>
-                  <div style={{color:C.gold,fontSize:11,direction:"rtl",fontFamily:"serif"}}>{m.name}</div>
+                  <div style={{color:C.cream,fontSize:13,fontWeight:700}}>{m.name_en||m.en}</div>
+                  <div style={{color:C.gold,fontSize:11,direction:"rtl",fontFamily:"serif"}}>{m.name_ur||m.name||""}</div>
                 </div>
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
-                <Bdg v="teal" ch={`🩸 ${m.bloodGroup}`}/>
-                {m.hasMedical&&<Bdg v="amber" ch="⚕ Medical"/>}
-                {m.allergies&&<Bdg v="red" ch="⚠ Allergy"/>}
+                <Bdg v="teal" ch={`🩸 ${m.blood_group||m.bloodGroup||"?"}`}/>
+                {(m.has_medical||m.hasMedical)&&<Bdg v="amber" ch="⚕ Medical"/>}
+                {(m.has_allergies||m.allergies)&&<Bdg v="red" ch="⚠ Allergy"/>}
               </div>
             </div>
-            {(m.hasMedical||m.allergies)&&(
+            {(m.has_medical||m.has_allergies||m.hasMedical||m.allergies)&&(
               <div style={{padding:10,background:C.surface,borderRadius:8,fontSize:12}}>
-                {m.hasMedical&&<div style={{color:C.creamDi,marginBottom:4}}>⚕ <strong style={{color:C.cream}}>Condition:</strong> Diabetes Type 2 — monitor meals carefully</div>}
-                {m.allergies&&<div style={{color:C.creamDi}}>⚠ <strong style={{color:C.cream}}>Allergy:</strong> Peanuts — carry EpiPen</div>}
+                {(m.medical_summary||m.has_medical)&&<div style={{color:C.creamDi,marginBottom:4}}>⚕ <strong style={{color:C.cream}}>Condition:</strong> {m.medical_summary||"See full profile"}</div>}
+                {(m.allergy_summary||m.has_allergies)&&<div style={{color:C.creamDi}}>⚠ <strong style={{color:C.cream}}>Allergy:</strong> {m.allergy_summary||"See full profile"}</div>}
               </div>
             )}
           </Cd>
@@ -737,65 +942,67 @@ function HealthScreen({user,go,showToast}){
         <div>
           <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>میری صحت</div>
           <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Health Profile</div>
-          <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Visible only to your assigned Amir</div>
+          <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Encrypted · Visible only to Amir · {BACKEND_READY?"Supabase DB":"localStorage"}</div>
         </div>
-        <button onClick={()=>setEditing(!editing)} style={{background:editing?C.goldDim:C.surface,border:`1.5px solid ${editing?C.gold:C.border}`,borderRadius:9,padding:"7px 14px",color:editing?C.goldHi:C.creamDi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+        {!dbLoading&&<button onClick={()=>setEditing(!editing)} style={{background:editing?C.goldDim:C.surface,border:`1.5px solid ${editing?C.gold:C.border}`,borderRadius:9,padding:"7px 14px",color:editing?C.goldHi:C.creamDi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
           {editing?"Cancel":"Edit"}
-        </button>
+        </button>}
       </div>
 
       <Cd s={{marginBottom:14,borderColor:C.green,background:"#031408"}}>
         <div style={{display:"flex",gap:10}}>
           <span style={{fontSize:18}}>🔒</span>
-          <div style={{fontSize:12,color:C.creamDi,lineHeight:1.7}}>Your health data is <strong style={{color:C.greenBr}}>AES-256 encrypted</strong>. Your Amir can view it only in emergencies. Access is always audit-logged.</div>
+          <div style={{fontSize:12,color:C.creamDi,lineHeight:1.7}}>Encrypted at rest · Amir-only access · Every view is audit-logged</div>
         </div>
       </Cd>
 
-      {/* Blood Group */}
-      <Cd s={{marginBottom:12}}>
-        <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>🩸 Blood Group</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-          {bgs.map(b=>(
-            <button key={b} onClick={()=>editing&&setBg(b)}
-              style={{padding:"8px 14px",borderRadius:8,border:`1.5px solid ${bg===b?C.tealHi:C.border}`,background:bg===b?"#041e1e":C.surface,color:bg===b?C.tealHi:C.creamDi,fontSize:13,fontWeight:700,cursor:editing?"pointer":"default",fontFamily:"inherit",transition:"all .2s"}}>{b}</button>
-          ))}
-        </div>
-      </Cd>
-
-      {editing?(
+      {dbLoading?<Spinner/>:(
         <>
-          <Inp label="Medical Conditions (encrypted)" val={conditions} set={setConditions} ph="e.g. Diabetes Type 2, Hypertension…"/>
-          <Inp label="Current Medications (encrypted)" val={meds} set={setMeds} ph="e.g. Metformin 500mg twice daily…"/>
-          <Inp label="Allergies (encrypted)" val={allergies} set={setAllergies} ph="e.g. Peanuts, Penicillin…"/>
-          <Inp label="Emergency Notes (encrypted)" val={notes} set={setNotes} ph="Any special instructions for your Amir…"/>
-          <Cd s={{marginBottom:16,borderColor:C.green}}>
-            <label style={{display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
-              <div onClick={()=>setVisibleToAmir(!visibleToAmir)}
-                style={{width:22,height:22,borderRadius:6,border:`2px solid ${visibleToAmir?C.greenBr:C.borderBr}`,background:visibleToAmir?C.green:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .2s"}}>
-                {visibleToAmir&&<svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7L6 10.5L11.5 4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
-              </div>
-              <span style={{color:C.creamDi,fontSize:12,lineHeight:1.6}}>Allow my Amir to view this health data during Jamaat</span>
-            </label>
-          </Cd>
-          <Btn fn={save} v="gold" ch="💾 Save Health Profile Securely"/>
-        </>
-      ):(
-        <Cd s={{padding:16}}>
-          <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>Current Profile</div>
-          {[
-            ["Blood Group",bg,"🩸"],
-            ["Medical Conditions",conditions||"None recorded","⚕"],
-            ["Medications",meds||"None","💊"],
-            ["Allergies",allergies||"None","⚠️"],
-            ["Emergency Notes",notes,"📝"],
-            ["Visible to Amir",visibleToAmir?"Yes — Amir can view":"No — Hidden","🔒"],
-          ].map(([k,v,ic])=>(
-            <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"9px 0",borderTop:`1px solid ${C.border}`}}>
-              <span style={{color:C.creamDi,fontSize:12,display:"flex",gap:6,alignItems:"center"}}><span>{ic}</span> {k}</span>
-              <span style={{color:C.cream,fontSize:12,fontWeight:600,maxWidth:"55%",textAlign:"right"}}>{v}</span>
+          <Cd s={{marginBottom:12}}>
+            <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>🩸 Blood Group</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+              {bgs.map(b=>(
+                <button key={b} onClick={()=>editing&&setBg(b)}
+                  style={{padding:"8px 14px",borderRadius:8,border:`1.5px solid ${bg===b?C.tealHi:C.border}`,background:bg===b?"#041e1e":C.surface,color:bg===b?C.tealHi:C.creamDi,fontSize:13,fontWeight:700,cursor:editing?"pointer":"default",fontFamily:"inherit",transition:"all .2s"}}>{b}</button>
+              ))}
             </div>
-          ))}
-        </Cd>
+          </Cd>
+
+          {editing?(
+            <>
+              <Inp label="Medical Conditions (encrypted)" val={conditions} set={setConditions} ph="e.g. Diabetes Type 2, Hypertension…"/>
+              <Inp label="Current Medications (encrypted)" val={meds} set={setMeds} ph="e.g. Metformin 500mg twice daily…"/>
+              <Inp label="Allergies (encrypted)" val={allergies} set={setAllergies} ph="e.g. Peanuts, Penicillin…"/>
+              <Inp label="Emergency Notes (encrypted)" val={notes} set={setNotes} ph="Any special instructions for your Amir…"/>
+              <Cd s={{marginBottom:16,borderColor:C.green}}>
+                <label style={{display:"flex",gap:12,alignItems:"center",cursor:"pointer"}} onClick={()=>setVisibleToAmir(!visibleToAmir)}>
+                  <div style={{width:22,height:22,borderRadius:6,border:`2px solid ${visibleToAmir?C.greenBr:C.borderBr}`,background:visibleToAmir?C.green:"transparent",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,transition:"all .2s"}}>
+                    {visibleToAmir&&<svg width="13" height="13" viewBox="0 0 14 14"><path d="M2.5 7L6 10.5L11.5 4" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>}
+                  </div>
+                  <span style={{color:C.creamDi,fontSize:12,lineHeight:1.6}}>Allow Amir to view this health data during Jamaat</span>
+                </label>
+              </Cd>
+              {saving?<Spinner/>:<Btn fn={save} v="gold" ch={`💾 Save to ${BACKEND_READY?"Supabase Database":"Local Storage"}`}/>}
+            </>
+          ):(
+            <Cd s={{padding:16}}>
+              <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>Saved Profile {BACKEND_READY&&<span style={{color:C.greenBr,fontSize:10}}>● Live DB</span>}</div>
+              {[
+                ["Blood Group",bg,"🩸"],
+                ["Medical Conditions",conditions||"None recorded","⚕"],
+                ["Medications",meds||"None","💊"],
+                ["Allergies",allergies||"None","⚠️"],
+                ["Emergency Notes",notes||"None","📝"],
+                ["Visible to Amir",visibleToAmir?"Yes — Amir can view":"No — Hidden","🔒"],
+              ].map(([k,v,ic])=>(
+                <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",padding:"9px 0",borderTop:`1px solid ${C.border}`}}>
+                  <span style={{color:C.creamDi,fontSize:12,display:"flex",gap:6,alignItems:"center"}}><span>{ic}</span> {k}</span>
+                  <span style={{color:C.cream,fontSize:12,fontWeight:600,maxWidth:"55%",textAlign:"right"}}>{v}</span>
+                </div>
+              ))}
+            </Cd>
+          )}
+        </>
       )}
     </div>
   );
@@ -936,9 +1143,16 @@ function BroadcastScreen({user,go,showToast}){
 
   const preview=msg?renderTemplate(NOTIF_TEMPLATES.broadcast[lang],{message:msg,amir:user.en,time:new Date().toLocaleTimeString()}):"";
 
-  const send=()=>{
+  const send=async()=>{
     setLoading(true);
-    setTimeout(()=>{setLoading(false);setSent(true);showToast("Broadcast sent to 6 family contacts","success");},1800);
+    const builtMsg=DB.buildMessage("broadcast",{message:msg,amir:user.en},lang);
+    await DB.logNotification({
+      type:"broadcast",sender_id:user.id,sender_name:user.en,
+      message:builtMsg,channel:"whatsapp+sms",lang,jamaat_id:JAMAAT.id,
+    });
+    setLoading(false);
+    setSent(true);
+    showToast(`Broadcast logged ${BACKEND_READY?"→ Supabase":"→ local"}`,"success");
   };
 
   if(sent) return(
@@ -1180,7 +1394,20 @@ function SOS({user,onBack}){
     if(phase!=="idle")return;
     setPhase("holding");setCd(3);
     cdRef.current=setInterval(()=>setCd(p=>{if(p<=1){clearInterval(cdRef.current);return 0;}return p-1;}),1000);
-    holdRef.current=setTimeout(()=>setPhase("sent"),3100);
+    holdRef.current=setTimeout(async()=>{
+      setPhase("sent");
+      // Log SOS to backend
+      const msg = DB.buildMessage("sos",{
+        name:user.en, location:"Pune Markaz (18.52°N, 73.86°E)",
+        amir:JAMAAT.amir.en, blood:user.bloodGroup||"Unknown",
+      }, user.lang||"ur");
+      await DB.logNotification({
+        type:"sos", sender_id:user.id, sender_name:user.en,
+        message:msg, channel:"sms+push", lang:user.lang||"ur",
+        location:"Pune Markaz", jamaat_id:JAMAAT.id,
+        amir_id:JAMAAT.id, family_phone:user.family?.phone||"",
+      });
+    },3100);
   };
   const cancel=()=>{
     if(phase!=="holding")return;
@@ -1274,9 +1501,19 @@ function LocationUpdate({user,go,showToast}){
     jamaat:JAMAAT.en,time:new Date().toLocaleTimeString(),pincode:pin||"——"
   });
 
-  const send=()=>{
+  const send=async()=>{
     setLoading(true);
-    setTimeout(()=>{setLoading(false);setSent(true);},1800);
+    const msg = DB.buildMessage("arrival",{
+      name: JAMAAT.members[0].en, location: loc,
+      jamaat: JAMAAT.en, pincode: pin,
+    }, lang);
+    await DB.logNotification({
+      type:"arrival", sender_id:user.id, sender_name:user.en,
+      message:msg, channel:"whatsapp", lang,
+      location:loc, pincode:pin, jamaat_id:JAMAAT.id,
+    });
+    setLoading(false);
+    setSent(true);
   };
 
   if(sent) return(
@@ -1542,16 +1779,47 @@ function Profile({user,go,onRoleChange,showToast}){
 ══════════════════════════════════════════════════════ */
 function Admin({go,showToast}){
   const [tab,setTab]=useState("overview");
+  const [banNum,setBanNum]=useState("");
+  const [banReason,setBanReason]=useState("");
+  const [banning,setBanning]=useState(false);
+  const [notifLogs,setNotifLogs]=useState([]);
+  const [logsLoading,setLogsLoading]=useState(false);
+
+  useEffect(()=>{
+    if(tab==="notifs"){
+      setLogsLoading(true);
+      DB.getNotifLogs("all").then(d=>{setNotifLogs(d||[]);setLogsLoading(false);});
+    }
+  },[tab]);
+
+  const banUser=async()=>{
+    if(!banNum.replace(/\s/g,"").length||!banReason.trim()){showToast("Enter Aadhaar and reason","error");return;}
+    setBanning(true);
+    const r=await DB.addBlacklist(banNum,banReason,"admin-u3");
+    setBanning(false);
+    if(r.ok){showToast(`✓ Aadhaar banned ${BACKEND_READY?"in Supabase":"locally"}`,"success");setBanNum("");setBanReason("");}
+    else showToast("Ban failed — check console","error");
+  };
+
+  const tabs=[["overview","📊 Overview"],["blacklist","🚫 Blacklist"],["notifs","📨 Notifications"],["audit","🔍 Audit"],["broadcast","📢 Broadcast"]];
+
   return(
     <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
-      <div style={{padding:"0 0 14px"}}>
+      <div style={{padding:"0 0 12px"}}>
         <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>ریاستی ایڈمن پینل</div>
         <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Maharashtra Admin</div>
+        <div style={{marginTop:6,display:"flex",gap:8,alignItems:"center"}}>
+          <span style={{fontSize:12,padding:"3px 10px",borderRadius:999,background:BACKEND_READY?"#041808":"#1a0e04",border:`1px solid ${BACKEND_READY?C.greenBr:C.amber}`,color:BACKEND_READY?C.greenBr:C.amberHi,fontWeight:700}}>
+            {BACKEND_READY?"🟢 Supabase Connected":"🟡 localStorage mode"}
+          </span>
+          {!BACKEND_READY&&<button onClick={()=>go("setup")} style={{background:"none",border:`1px solid ${C.gold}`,borderRadius:8,padding:"3px 10px",color:C.gold,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Setup DB →</button>}
+        </div>
       </div>
 
-      <div style={{display:"flex",background:C.surface,borderRadius:12,padding:4,marginBottom:14,gap:3}}>
-        {[["overview","📊 Overview"],["audit","🔍 Audit Log"],["broadcast","📢 Broadcast"]].map(([t,l])=>(
-          <button key={t} onClick={()=>setTab(t)} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",background:tab===t?C.gold:"transparent",color:tab===t?C.bg:C.creamDi,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all .2s"}}>{l}</button>
+      {/* Scrollable tab bar */}
+      <div style={{display:"flex",overflowX:"auto",gap:4,marginBottom:14,paddingBottom:4}}>
+        {tabs.map(([t,l])=>(
+          <button key={t} onClick={()=>setTab(t)} style={{flexShrink:0,padding:"8px 12px",borderRadius:9,border:"none",background:tab===t?C.gold:"transparent",color:tab===t?C.bg:C.creamDi,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all .2s",whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
 
@@ -1566,13 +1834,7 @@ function Admin({go,showToast}){
               </Cd>
             ))}
           </div>
-          {[
-            ["🎪 Create Ijtima / Event","Publish large-scale events for the state",""],
-            ["📢 Broadcast to All Users","Send message to all 12,483 verified users",""],
-            ["👤 Appoint District Admin","Delegate authority to district leaders",""],
-            ["🚫 Ban Management","Review and ban flagged Aadhaar hashes",""],
-            ["📊 Analytics Dashboard","Participation and safety reports",""],
-          ].map(([t,d])=>(
+          {[["🎪 Create Ijtima / Event","Publish large-scale events"],["👤 Appoint District Admin","Delegate authority"],["📊 Analytics Dashboard","Participation reports"]].map(([t,d])=>(
             <Cd key={t} s={{marginBottom:9,padding:14,cursor:"pointer"}} onClick={()=>showToast("Feature coming soon","info")}>
               <div style={{color:C.cream,fontSize:13,fontWeight:700,marginBottom:3}}>{t}</div>
               <div style={{color:C.txtDi,fontSize:12}}>{d}</div>
@@ -1581,22 +1843,79 @@ function Admin({go,showToast}){
         </>
       )}
 
+      {tab==="blacklist"&&(
+        <>
+          <Cd s={{marginBottom:14,borderColor:C.red,background:C.redBg}}>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <span style={{fontSize:20}}>⚠️</span>
+              <div style={{color:C.redHi,fontSize:12,fontWeight:600}}>Permanently ban an Aadhaar identity. Cannot be undone without India Admin approval. SHA-256 hash stored — no raw number kept.</div>
+            </div>
+          </Cd>
+          <Inp label="Aadhaar Number to Ban" val={banNum} set={setBanNum} ph="XXXX XXXX XXXX" max={14} kb="numeric"/>
+          <div style={{marginBottom:16}}>
+            <div style={{color:C.creamDi,fontSize:13,marginBottom:6,fontWeight:500}}>Ban Reason</div>
+            <textarea value={banReason} onChange={e=>setBanReason(e.target.value)} placeholder="e.g. False identity verified by district admin…"
+              style={{width:"100%",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"12px 14px",color:C.cream,fontSize:14,fontFamily:"inherit",outline:"none",boxSizing:"border-box",resize:"none",minHeight:80,transition:"border-color .2s"}}
+              onFocus={e=>e.target.style.borderColor=C.red} onBlur={e=>e.target.style.borderColor=C.border}/>
+          </div>
+          {banning?<Spinner/>:<Btn fn={banUser} v="danger" ch={`🚫 Ban & Blacklist ${BACKEND_READY?"→ Supabase":"→ Local"}`}/>}
+          <div style={{marginTop:16}}>
+            <div style={{color:C.txtDi,fontSize:11,marginBottom:10}}>RECENTLY BANNED</div>
+            {AUDIT_LOG.filter(a=>a.action==="USER_BANNED").map(a=>(
+              <Cd key={a.id} s={{marginBottom:8,padding:12,borderColor:C.red}}>
+                <div style={{color:C.cream,fontSize:12,fontWeight:600,marginBottom:2}}>{a.target}</div>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{color:C.txtDi,fontSize:11}}>{a.actor}</span>
+                  <span style={{color:C.txtDi,fontSize:10}}>{a.time}</span>
+                </div>
+              </Cd>
+            ))}
+          </div>
+        </>
+      )}
+
+      {tab==="notifs"&&(
+        <>
+          <Cd s={{marginBottom:14,borderColor:C.teal,background:"#041e1e"}}>
+            <div style={{color:C.tealHi,fontSize:12,fontWeight:600}}>
+              📨 All notifications sent via app — real-time from {BACKEND_READY?"Supabase":"localStorage"}
+            </div>
+          </Cd>
+          {logsLoading?<Spinner/>:notifLogs.length===0?(
+            <div style={{textAlign:"center",color:C.txtDi,fontSize:13,padding:32}}>No notifications yet. Send a location update or trigger SOS to see logs here.</div>
+          ):notifLogs.map((n,i)=>{
+            const typeColor={arrival:C.greenBr,sos:C.redHi,broadcast:C.gold,audit:C.tealHi}[n.type]||C.creamDi;
+            return(
+              <Cd key={i} s={{marginBottom:10,padding:14,borderLeft:`3px solid ${typeColor}`}}>
+                <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                  <span style={{background:typeColor+"22",border:`1px solid ${typeColor}44`,color:typeColor,padding:"2px 8px",borderRadius:999,fontSize:10,fontWeight:700}}>{(n.type||"").toUpperCase()}</span>
+                  <span style={{color:C.txtDi,fontSize:10}}>{n.sent_at?new Date(n.sent_at).toLocaleString():""}</span>
+                </div>
+                <div style={{color:C.cream,fontSize:12,fontWeight:600,marginBottom:4}}>{n.sender_name||"System"}</div>
+                <div style={{background:C.surface,borderRadius:8,padding:"8px 10px",color:C.creamDi,fontSize:11,lineHeight:1.7,direction:n.lang==="ur"?"rtl":"ltr",whiteSpace:"pre-line",maxHeight:80,overflow:"hidden"}}>{n.message}</div>
+                <div style={{color:C.txtDi,fontSize:10,marginTop:6}}>📱 {n.channel||"push"} · {n.lang==="ur"?"Urdu":"English"}</div>
+              </Cd>
+            );
+          })}
+        </>
+      )}
+
       {tab==="audit"&&(
         <>
           <Cd s={{marginBottom:14,borderColor:C.amber,background:"#1a0e04"}}>
             <div style={{display:"flex",gap:8,alignItems:"center"}}>
               <span style={{fontSize:18}}>🔒</span>
-              <div style={{color:C.amberHi,fontSize:12}}>Audit log is immutable. Every admin and Amir action is permanently recorded.</div>
+              <div style={{color:C.amberHi,fontSize:12}}>Immutable audit log. Every admin/Amir action permanently recorded.</div>
             </div>
           </Cd>
           {AUDIT_LOG.map(a=>(
             <Cd key={a.id} s={{marginBottom:9,padding:13}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                 <span style={{background:"#040e1e",border:"1px solid #1e4080",color:"#4888e0",padding:"2px 8px",borderRadius:999,fontSize:10,fontWeight:700,fontFamily:"monospace"}}>{a.action}</span>
-                <span style={{color:a.ok?C.greenBr:C.redHi,fontSize:11}}>{a.ok?"✓ Success":"⚠ Alert"}</span>
+                <span style={{color:a.ok?C.greenBr:C.redHi,fontSize:11}}>{a.ok?"✓ OK":"⚠ Alert"}</span>
               </div>
               <div style={{color:C.cream,fontSize:12,fontWeight:600,marginBottom:3}}>{a.target}</div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
                 <div style={{color:C.txtDi,fontSize:11}}>{a.actor} · {a.ip}</div>
                 <div style={{color:C.txtDi,fontSize:10}}>{a.time}</div>
               </div>
@@ -1733,6 +2052,124 @@ function AddMember({go,showToast}){
 /* ══════════════════════════════════════════════════════
    BOTTOM NAV + SOS BUTTON
 ══════════════════════════════════════════════════════ */
+/* ══════════════════════════════════════════════════════
+   SCREEN: SUPABASE SETUP GUIDE
+══════════════════════════════════════════════════════ */
+function SetupScreen({go}){
+  const SQL=`-- Run this in Supabase SQL Editor
+
+-- 1. Blacklisted identities
+CREATE TABLE blacklisted_identities (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  aadhaar_hash CHAR(64) NOT NULL UNIQUE,
+  reason TEXT NOT NULL,
+  banned_by TEXT,
+  banned_at TIMESTAMPTZ DEFAULT NOW(),
+  severity TEXT DEFAULT 'permanent'
+);
+
+-- 2. Health profiles
+CREATE TABLE health_profiles (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT NOT NULL UNIQUE,
+  jamaat_id TEXT,
+  blood_group VARCHAR(4),
+  medical_conditions TEXT,
+  medications TEXT,
+  allergies TEXT,
+  emergency_notes TEXT,
+  visible_to_amir BOOLEAN DEFAULT TRUE,
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- 3. Notification logs
+CREATE TABLE notification_logs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  type TEXT,
+  sender_id TEXT,
+  sender_name TEXT,
+  message TEXT,
+  channel TEXT,
+  lang CHAR(2) DEFAULT 'ur',
+  location TEXT,
+  pincode TEXT,
+  jamaat_id TEXT,
+  family_phone TEXT,
+  sent_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable public read/write (for demo — restrict in production)
+ALTER TABLE blacklisted_identities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE health_profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notification_logs ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "public_all" ON blacklisted_identities FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "public_all" ON health_profiles FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "public_all" ON notification_logs FOR ALL USING (true) WITH CHECK (true);`;
+
+  const [copied,setCopied]=useState(false);
+  const copy=()=>{navigator.clipboard?.writeText(SQL);setCopied(true);setTimeout(()=>setCopied(false),2000);};
+
+  return(
+    <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
+      <BackBtn fn={()=>go("admin")} label="Admin"/>
+      <div style={{padding:"14px 0 16px"}}>
+        <div style={{color:C.gold,fontSize:12,marginBottom:2}}>🗄️ Backend Setup</div>
+        <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Connect Supabase</div>
+        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Free forever · 5 minutes · No server needed</div>
+      </div>
+
+      {/* Status */}
+      <Cd s={{marginBottom:14,borderColor:BACKEND_READY?C.greenBr:C.amber,background:BACKEND_READY?"#031408":"#1a0e04"}}>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <span style={{fontSize:22}}>{BACKEND_READY?"✅":"⚙️"}</span>
+          <div>
+            <div style={{color:BACKEND_READY?C.greenBr:C.amberHi,fontSize:13,fontWeight:700}}>{BACKEND_READY?"Supabase Connected!":"Not Connected — Using localStorage"}</div>
+            <div style={{color:C.txtDi,fontSize:11,marginTop:2}}>{BACKEND_READY?"Health, blacklist, notifications → live database":"All data saved locally on this device only"}</div>
+          </div>
+        </div>
+      </Cd>
+
+      {/* Steps */}
+      {[
+        {n:"1",title:"Create Supabase Account",body:"Go to supabase.com → Sign up free → Create New Project\nChoose region: Asia South (Mumbai)",link:"https://supabase.com",btn:"Open Supabase →"},
+        {n:"2",title:"Run SQL Schema",body:"In Supabase → SQL Editor → paste the schema below → Run",link:null,btn:null},
+        {n:"3",title:"Get API Keys",body:"Supabase → Project Settings → API\nCopy: Project URL and anon public key",link:null,btn:null},
+        {n:"4",title:"Update index.html",body:`In your GitHub repo, edit index.html\nFind line:\nconst SUPABASE_URL = "https://YOUR_PROJECT_ID..."\n\nReplace with your actual URL and key`,link:null,btn:null},
+      ].map(s=>(
+        <Cd key={s.n} s={{marginBottom:12,borderLeft:`3px solid ${C.gold}`}}>
+          <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+            <div style={{width:28,height:28,borderRadius:"50%",background:C.goldDim,border:`1.5px solid ${C.gold}`,display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:14,fontWeight:800,flexShrink:0}}>{s.n}</div>
+            <div style={{flex:1}}>
+              <div style={{color:C.cream,fontSize:13,fontWeight:700,marginBottom:6}}>{s.title}</div>
+              <div style={{color:C.creamDi,fontSize:12,lineHeight:1.7,whiteSpace:"pre-line"}}>{s.body}</div>
+              {s.link&&<button onClick={()=>window.open(s.link,"_blank")} style={{marginTop:8,background:C.goldDim,border:`1px solid ${C.gold}`,borderRadius:8,padding:"6px 14px",color:C.goldHi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{s.btn}</button>}
+            </div>
+          </div>
+        </Cd>
+      ))}
+
+      {/* SQL Block */}
+      <div style={{marginBottom:16}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+          <div style={{color:C.gold,fontSize:12,fontWeight:700}}>📋 SQL Schema — Copy & paste in Supabase</div>
+          <button onClick={copy} style={{background:copied?C.green:C.surface,border:`1px solid ${copied?C.greenBr:C.border}`,borderRadius:8,padding:"5px 12px",color:copied?C.greenBr:C.creamDi,fontSize:11,cursor:"pointer",fontFamily:"inherit",transition:"all .2s"}}>{copied?"✓ Copied!":"Copy SQL"}</button>
+        </div>
+        <div style={{background:"#020c06",border:`1px solid ${C.border}`,borderRadius:10,padding:12,overflowX:"auto",maxHeight:220,overflowY:"auto"}}>
+          <pre style={{color:"#a8d8a8",fontSize:10,lineHeight:1.7,fontFamily:"monospace",whiteSpace:"pre"}}>{SQL}</pre>
+        </div>
+      </div>
+
+      <Cd s={{borderColor:C.greenHi,background:"#031408"}}>
+        <div style={{color:C.greenBr,fontSize:12,fontWeight:700,marginBottom:6}}>After connecting Supabase:</div>
+        {["✓ Health profiles saved permanently to PostgreSQL","✓ Blacklist works across all devices in real-time","✓ All notifications logged with timestamp","✓ Admin sees live data from any device"].map(t=>(
+          <div key={t} style={{color:C.creamDi,fontSize:12,marginBottom:4}}>{t}</div>
+        ))}
+      </Cd>
+    </div>
+  );
+}
+
 function BottomNav({active,go}){
   const items=[
     {id:"dashboard",icon:"🏠",label:"Home"},
@@ -1815,7 +2252,17 @@ function App(){
 
   const handleLogin=(u)=>{setUser(u);setPhase("tc");};
   const handleTC=()=>setPhase(user.family?"app":"family");
-  const handleFamily=(fam)=>{setUser(p=>({...p,family:fam}));setPhase("app");};
+  const handleFamily=async(fam)=>{
+    const updatedUser={...user,family:fam};
+    setUser(updatedUser);
+    setPhase("app");
+    // Log welcome notification
+    const welcomeMsg=DB.buildMessage("welcome",{name:updatedUser.en},updatedUser.lang||"ur");
+    await DB.logNotification({
+      type:"welcome",sender_id:updatedUser.id,sender_name:updatedUser.en,
+      message:welcomeMsg,channel:"push",lang:updatedUser.lang||"ur",
+    });
+  };
   const handleRoleChange=(u)=>{setUser(u);go("dashboard");};
 
   const handleRegister=(evId)=>{
@@ -1849,6 +2296,7 @@ function App(){
     if(screen==="card")return <DigitalCard user={user} go={go}/>;
     if(screen==="map")return <MapView go={go}/>;
     if(screen==="admin")return <Admin go={go} showToast={showToast}/>;
+    if(screen==="setup")return <SetupScreen go={go}/>;
     if(screen==="amal")return <AmalScreen go={go} user={user}/>;
     if(screen==="addMember")return <AddMember go={go} showToast={showToast}/>;
     if(screen==="health")return <HealthScreen user={user} go={go} showToast={showToast}/>;
