@@ -177,8 +177,81 @@ const DB = {
 };
 
 /* ══════════════════════════════════════════════════════
-   THEME
+   SMS SERVICE — Fast2SMS API
+   Sends real SMS to family contacts in India
 ══════════════════════════════════════════════════════ */
+const FAST2SMS_KEY = "SaJtrWEklAZ951O8TcpqQoCIbVK6nD3wLYH7M2UFmXiByGxNvR4pSRsmAfQ3w1HdP05yEnrxeJYMGCtk";
+
+const SMS = {
+
+  // Send SMS to one number
+  async send(phone, message) {
+    // Clean phone number — remove +91, spaces, dashes
+    const num = phone.replace(/[^0-9]/g,"").slice(-10);
+    if(num.length !== 10) { console.warn("Invalid phone:", phone); return {ok:false}; }
+
+    try {
+      const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_KEY}&route=q&message=${encodeURIComponent(message)}&language=unicode&flash=0&numbers=${num}`;
+      const res = await fetch(url);
+      const data = await res.json();
+      console.log("SMS sent:", data);
+      return { ok: data.return === true, data };
+    } catch(e) {
+      console.error("SMS error:", e);
+      return { ok: false, error: e.message };
+    }
+  },
+
+  // Send arrival notification
+  async arrival(familyPhone, userName, location, jamaat, pincode, lang="ur") {
+    const msg = DB.buildMessage("arrival", {
+      name: userName, location, jamaat, pincode,
+      time: new Date().toLocaleTimeString("en-IN"),
+    }, lang);
+    const result = await this.send(familyPhone, msg);
+    await DB.logNotification({
+      type:"arrival", sender_name:userName,
+      message:msg, channel:"sms", lang,
+      location, pincode,
+    });
+    return result;
+  },
+
+  // Send SOS alert
+  async sos(amirPhone, familyPhone, userName, location, bloodGroup, lang="ur") {
+    const msg = DB.buildMessage("sos", {
+      name: userName, location,
+      amir: JAMAAT.amir.en,
+      blood: bloodGroup || "Unknown",
+    }, lang);
+    const results = await Promise.all([
+      amirPhone   ? this.send(amirPhone, msg)   : Promise.resolve({ok:false}),
+      familyPhone ? this.send(familyPhone, msg) : Promise.resolve({ok:false}),
+    ]);
+    await DB.logNotification({
+      type:"sos", sender_name:userName,
+      message:msg, channel:"sms", lang, location,
+    });
+    return results;
+  },
+
+  // Send broadcast to multiple numbers
+  async broadcast(phones, message, senderName, lang="ur") {
+    const msg = DB.buildMessage("broadcast", {
+      message, amir: senderName,
+    }, lang);
+    const results = [];
+    for(const phone of phones) {
+      const r = await this.send(phone, msg);
+      results.push(r);
+    }
+    await DB.logNotification({
+      type:"broadcast", sender_name:senderName,
+      message:msg, channel:"sms", lang,
+    });
+    return results;
+  },
+};
 const C = {
   bg:"#060e09", bg2:"#0a1610", surface:"#0f1f14",
   card:"#132819", cardHi:"#192f1e", border:"#1e3c27",
@@ -1145,14 +1218,13 @@ function BroadcastScreen({user,go,showToast}){
 
   const send=async()=>{
     setLoading(true);
-    const builtMsg=DB.buildMessage("broadcast",{message:msg,amir:user.en},lang);
-    await DB.logNotification({
-      type:"broadcast",sender_id:user.id,sender_name:user.en,
-      message:builtMsg,channel:"whatsapp+sms",lang,jamaat_id:JAMAAT.id,
-    });
+    // Send REAL SMS via Fast2SMS to family contacts
+    const phones = JAMAAT.members.map(m=>m.familyPhone).filter(Boolean);
+    if(user.family?.phone) phones.push(user.family.phone);
+    await SMS.broadcast(phones, msg, user.en, lang);
     setLoading(false);
     setSent(true);
-    showToast(`Broadcast logged ${BACKEND_READY?"→ Supabase":"→ local"}`,"success");
+    showToast(`📱 SMS bheja gaya ${phones.length} contacts ko!`,"success");
   };
 
   if(sent) return(
@@ -1396,17 +1468,15 @@ function SOS({user,onBack}){
     cdRef.current=setInterval(()=>setCd(p=>{if(p<=1){clearInterval(cdRef.current);return 0;}return p-1;}),1000);
     holdRef.current=setTimeout(async()=>{
       setPhase("sent");
-      // Log SOS to backend
-      const msg = DB.buildMessage("sos",{
-        name:user.en, location:"Pune Markaz (18.52°N, 73.86°E)",
-        amir:JAMAAT.amir.en, blood:user.bloodGroup||"Unknown",
-      }, user.lang||"ur");
-      await DB.logNotification({
-        type:"sos", sender_id:user.id, sender_name:user.en,
-        message:msg, channel:"sms+push", lang:user.lang||"ur",
-        location:"Pune Markaz", jamaat_id:JAMAAT.id,
-        amir_id:JAMAAT.id, family_phone:user.family?.phone||"",
-      });
+      // Send REAL SMS via Fast2SMS
+      await SMS.sos(
+        JAMAAT.amir.phone,
+        user.family?.phone||"",
+        user.en,
+        "Pune Markaz (18.52°N, 73.86°E)",
+        user.bloodGroup||"Unknown",
+        user.lang||"ur"
+      );
     },3100);
   };
   const cancel=()=>{
@@ -1503,15 +1573,23 @@ function LocationUpdate({user,go,showToast}){
 
   const send=async()=>{
     setLoading(true);
-    const msg = DB.buildMessage("arrival",{
-      name: JAMAAT.members[0].en, location: loc,
-      jamaat: JAMAAT.en, pincode: pin,
-    }, lang);
-    await DB.logNotification({
-      type:"arrival", sender_id:user.id, sender_name:user.en,
-      message:msg, channel:"whatsapp", lang,
-      location:loc, pincode:pin, jamaat_id:JAMAAT.id,
-    });
+    // Send REAL SMS to all jamaat member family contacts
+    const familyPhones = JAMAAT.members
+      .map(m => m.familyPhone || null)
+      .filter(Boolean);
+
+    // Also send to the demo family contact if set
+    if(user.family?.phone) familyPhones.push(user.family.phone);
+
+    // Send SMS via Fast2SMS
+    if(familyPhones.length > 0) {
+      await Promise.all(familyPhones.map(phone =>
+        SMS.arrival(phone, JAMAAT.members[0].en, loc, JAMAAT.en, pin, lang)
+      ));
+    } else {
+      // Log only (no family phones in demo data)
+      await SMS.arrival(user.family?.phone||"", JAMAAT.members[0].en, loc, JAMAAT.en, pin, lang);
+    }
     setLoading(false);
     setSent(true);
   };
