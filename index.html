@@ -4,11 +4,46 @@
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no"/>
   <title>JAMAT — جماعت مینجمنٹ پلیٹ فارم</title>
+  <meta name="theme-color" content="#060e09"/>
+  <meta name="mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black"/>
+  <meta name="apple-mobile-web-app-title" content="JAMAT"/>
+  <link rel="manifest" href="data:application/json,{&quot;name&quot;:&quot;JAMAT Platform&quot;,&quot;short_name&quot;:&quot;JAMAT&quot;,&quot;start_url&quot;:&quot;/Jamaat/&quot;,&quot;display&quot;:&quot;standalone&quot;,&quot;background_color&quot;:&quot;#060e09&quot;,&quot;theme_color&quot;:&quot;#060e09&quot;,&quot;icons&quot;:[{&quot;src&quot;:&quot;data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23060e09'/%3E%3Ctext y='.9em' font-size='90' x='5'%3E%F0%9F%95%8C%3C/text%3E%3C/svg%3E&quot;,&quot;sizes&quot;:&quot;any&quot;}]}"/>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script>
+    // Service Worker registration
+    if('serviceWorker' in navigator){
+      navigator.serviceWorker.register('data:application/javascript,' + encodeURIComponent(`
+        self.addEventListener('install', e => self.skipWaiting());
+        self.addEventListener('activate', e => clients.claim());
+        self.addEventListener('fetch', e => {
+          if(e.request.method !== 'GET') return;
+          e.respondWith(fetch(e.request).catch(() => caches.match(e.request)));
+        });
+      `)).catch(()=>{});
+    }
+    // Push notification permission
+    window.requestPushPermission = async () => {
+      if('Notification' in window){
+        const p = await Notification.requestPermission();
+        return p === 'granted';
+      }
+      return false;
+    };
+    window.sendLocalNotif = (title, body) => {
+      if(Notification.permission === 'granted'){
+        new Notification(title, {body, icon:'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">🕌</text></svg>'});
+      }
+    };
+    // PWA install prompt
+    window.deferredInstall = null;
+    window.addEventListener('beforeinstallprompt', e => { e.preventDefault(); window.deferredInstall = e; });
+  </script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -986,6 +1021,7 @@ function Dashboard({user,go,events,onArrived}){
     {icon:"🖼️",label:"My Card",screen:"card"},
     {icon:"🕌",label:"Islamic",screen:"islamic"},
     {icon:"📊",label:"Analytics",screen:"analytics"},
+    {icon:"🏘️",label:"All Jamaats",screen:"jamaatList"},
     ...(isAdmin?[{icon:"⚙️",label:"Admin",screen:"admin"}]:[]),
   ];
 
@@ -1308,10 +1344,11 @@ function JamaatScreen({user,go,showToast,onMemberTap}){
             <div key={k}><div style={{color:C.txtDi,fontSize:9,letterSpacing:.5}}>{k.toUpperCase()}</div><div style={{color:C.cream,fontSize:12,fontWeight:600,marginTop:2}}>{v}</div></div>
           ))}
         </div>
-        <div style={{display:"flex",gap:8}}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
           <Btn fn={()=>go("map")} v="dark" s={{flex:1,padding:10,fontSize:12}} ch="🗺️ Navigate"/>
           {isAmir&&<Btn fn={()=>go("location")} v="gold" s={{flex:1,padding:10,fontSize:12}} ch="📍 Update"/>}
           {isAmir&&<Btn fn={()=>go("addMember")} v="outline" s={{flex:1,padding:10,fontSize:12}} ch="+ Add"/>}
+          {isAmir&&<Btn fn={()=>go("amirHandover")} v="dark" s={{flex:1,padding:10,fontSize:11}} ch="🏛️ Handover"/>}
         </div>
       </Cd>
 
@@ -1549,9 +1586,10 @@ function EventDetail({ev,user,onBack,onQR,onRegister}){
           <div style={{background:C.surface,borderRadius:5,height:6,overflow:"hidden"}}>
             <div style={{height:"100%",width:`${Math.min(100,(ev.reg/ev.cap)*100)}%`,background:`linear-gradient(90deg,${C.greenHi},${C.greenBr})`,borderRadius:5}}/>
           </div>
-          <div style={{color:C.txtDi,fontSize:11,marginTop:4}}>{Math.round((ev.reg/ev.cap)*100)}% filled</div>
+          <div style={{color:C.txtDi,fontSize:11,marginTop:4}}>{Math.round((ev.reg/ev.cap)*100)}% filled · {(ev.cap-ev.reg).toLocaleString()} spots left</div>
         </div>
       </Cd>
+      <EventCountdown eventDate={ev.date}/>
 
       {queuePos&&(
         <Cd s={{marginBottom:14,borderColor:C.teal,background:"#041e1e"}}>
@@ -1902,7 +1940,7 @@ function showAlert(m){alert(m);}
 /* ══════════════════════════════════════════════════════
    SCREEN: LEDGER (Hash-chained)
 ══════════════════════════════════════════════════════ */
-function Ledger({user,go,ledger}){
+function Ledger({user,go,ledger,showToast}){
   const jamaats=ledger.filter(l=>l.type==="jamaat");
   const evts=ledger.filter(l=>l.type==="event");
   const totalDays=ledger.reduce((a,l)=>a+l.days,0);
@@ -1946,10 +1984,22 @@ function Ledger({user,go,ledger}){
       ))}
 
       <Cd s={{padding:12,textAlign:"center",borderColor:C.goldDim}}>
-        <div style={{color:C.txtDi,fontSize:11,lineHeight:1.7}}>
+        <div style={{color:C.txtDi,fontSize:11,lineHeight:1.7,marginBottom:10}}>
           🔒 Records are <strong style={{color:C.gold}}>hash-chained and immutable</strong>.<br/>
-          Stored permanently. Cannot be edited or deleted by anyone.
+          Stored permanently. Cannot be edited by anyone.
         </div>
+        <button onClick={async()=>{
+          const text=ledger.map(l=>`${l.type==="jamaat"?"🧭":"🎪"} ${l.en}
+   ${l.start} → ${l.end} · ${l.days} days${l.score?" · Score: "+l.score:""}
+   Hash: ${l.hash}`).join("
+
+");
+          const shareData={title:"JAMAT Lifetime Ledger",text:`${user.en}'s Jamaat History
+
+${text}`,};
+          if(navigator.share) await navigator.share(shareData);
+          else{navigator.clipboard?.writeText(shareData.text);showToast&&showToast("Copied to clipboard!","success");}
+        }} style={{background:C.goldDim,border:`1px solid ${C.gold}`,borderRadius:10,padding:"10px 20px",color:C.goldHi,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>📤 Share My Ledger</button>
       </Cd>
     </div>
   );
@@ -2042,8 +2092,8 @@ function Profile({user,go,onRoleChange,showToast,onPhotoChange}){
 
       {/* Quick links */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-        {[["❤️ Health Profile","health"],["📜 Ledger","ledger"],["🕌 Attendance","attendance"],["🖼️ My Card","card"]].map(([l,s])=>(
-          <Btn key={l} fn={()=>go(s)} v="dark" s={{padding:12,fontSize:12}} ch={l}/>
+        {[["❤️ Health","health"],["📜 History","ledger"],["🕌 Attendance","attendance"],["🖼️ My Card","card"],["👨‍👩‍👧 Family","familyContacts"],["⚙️ Settings","settings"],["🆘 SOS Log","sosHistory"],["❓ Help","help"]].map(([l,s])=>(
+          <Btn key={l} fn={()=>go(s)} v="dark" s={{padding:12,fontSize:11}} ch={l}/>
         ))}
       </div>
 
@@ -3447,6 +3497,545 @@ function MemberProfile({member,go,user,showToast}){
 }
 
 
+
+/* ══════════════════════════════════════════════════════
+   ⚙️ SETTINGS SCREEN
+   Language, notifications, theme, logout, account
+══════════════════════════════════════════════════════ */
+function SettingsScreen({go,user,onRoleChange,showToast}){
+  const [lang,setLangState]=useState(user.lang||"ur");
+  const [pushEnabled,setPushEnabled]=useState(Notification?.permission==="granted");
+  const [notifSMS,setNotifSMS]=useState(true);
+  const [notifWA,setNotifWA]=useState(true);
+  const [installable,setInstallable]=useState(!!window.deferredInstall);
+
+  const changeLang=(l)=>{
+    setLangState(l);
+    localStorage.setItem("jamat_lang",l);
+    showToast(`Language: ${l==="ur"?"Urdu / اردو":l==="hi"?"Hindi / हिंदी":"English"}`,"success");
+  };
+
+  const requestPush=async()=>{
+    const ok=await window.requestPushPermission?.();
+    setPushEnabled(ok);
+    if(ok){showToast("✓ Notifications enabled!","success");window.sendLocalNotif?.("JAMAT","Welcome! Notifications are now active 🕌");}
+    else showToast("Notification permission denied","error");
+  };
+
+  const installApp=async()=>{
+    if(window.deferredInstall){
+      window.deferredInstall.prompt();
+      const {outcome}=await window.deferredInstall.userChoice;
+      if(outcome==="accepted"){showToast("✓ JAMAT installed on home screen!","success");setInstallable(false);}
+    }else showToast("Open in Chrome browser to install","info");
+  };
+
+  const logout=()=>{
+    localStorage.removeItem("jamat_current_user");
+    showToast("Logged out","info");
+    setTimeout(()=>window.location.reload(),800);
+  };
+
+  const Toggle=({val,set,label,sub,icon})=>(
+    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 0",borderBottom:`1px solid ${C.border}`}}>
+      <div style={{display:"flex",gap:10,alignItems:"center"}}>
+        <span style={{fontSize:18}}>{icon}</span>
+        <div>
+          <div style={{color:C.cream,fontSize:13,fontWeight:600}}>{label}</div>
+          {sub&&<div style={{color:C.txtDi,fontSize:11,marginTop:1}}>{sub}</div>}
+        </div>
+      </div>
+      <div onClick={()=>set(!val)} style={{width:44,height:24,borderRadius:999,background:val?C.greenBr:C.border,cursor:"pointer",position:"relative",transition:"background .2s",flexShrink:0}}>
+        <div style={{position:"absolute",width:20,height:20,borderRadius:"50%",background:"white",top:2,left:val?22:2,transition:"left .2s",boxShadow:"0 1px 3px #00000040"}}/>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{padding:"0 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <div style={{padding:"20px 6px 16px",display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+        <div>
+          <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>ترتیبات</div>
+          <div style={{color:C.cream,fontSize:22,fontWeight:800}}>Settings</div>
+        </div>
+      </div>
+
+      {/* Language */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:14}}>🌍 Language / زبان</div>
+        <div style={{display:"flex",gap:8}}>
+          {[["ur","اردو","Urdu"],["hi","हिंदी","Hindi"],["en","EN","English"]].map(([l,native,eng])=>(
+            <button key={l} onClick={()=>changeLang(l)} style={{flex:1,padding:"10px 4px",borderRadius:10,border:`1.5px solid ${lang===l?C.gold:C.border}`,background:lang===l?C.goldDim:C.surface,cursor:"pointer",fontFamily:"inherit",textAlign:"center",transition:"all .2s"}}>
+              <div style={{color:lang===l?C.goldHi:C.cream,fontSize:16,fontWeight:700}}>{native}</div>
+              <div style={{color:lang===l?C.gold:C.txtDi,fontSize:10,marginTop:2}}>{eng}</div>
+            </button>
+          ))}
+        </div>
+      </Cd>
+
+      {/* Notifications */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:8}}>🔔 Notifications</div>
+        <Toggle val={pushEnabled} set={requestPush} icon="📱" label="Push Notifications" sub="App alerts on your phone"/>
+        <Toggle val={notifSMS} set={setNotifSMS} icon="💬" label="SMS Alerts" sub="Family location updates via SMS"/>
+        <Toggle val={notifWA} set={setNotifWA} icon="📱" label="WhatsApp Updates" sub="Location & SOS via WhatsApp"/>
+      </Cd>
+
+      {/* Appearance */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:8}}>🎨 Appearance</div>
+        <div style={{display:"flex",gap:8}}>
+          {[["dark","🌙 Dark"],["light","☀️ Light"]].map(([t,l])=>(
+            <button key={t} onClick={()=>{setTheme(t);showToast(l+" mode","success");}} style={{flex:1,padding:"10px",borderRadius:10,border:`1.5px solid ${getTheme()===t?C.gold:C.border}`,background:getTheme()===t?C.goldDim:C.surface,cursor:"pointer",fontFamily:"inherit",color:getTheme()===t?C.goldHi:C.creamDi,fontSize:13,fontWeight:700,transition:"all .2s"}}>{l}</button>
+          ))}
+        </div>
+      </Cd>
+
+      {/* PWA Install */}
+      <Cd s={{marginBottom:14,borderColor:C.greenHi}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{color:C.greenBr,fontSize:13,fontWeight:700}}>📲 Install App</div>
+            <div style={{color:C.txtDi,fontSize:11,marginTop:2}}>Add JAMAT to your home screen</div>
+          </div>
+          <button onClick={installApp} style={{background:`linear-gradient(140deg,${C.greenHi},${C.green})`,border:"none",borderRadius:10,padding:"8px 16px",color:C.cream,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>Install</button>
+        </div>
+      </Cd>
+
+      {/* Account */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>👤 Account</div>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+          <span style={{color:C.creamDi,fontSize:13}}>Name</span><span style={{color:C.cream,fontSize:13,fontWeight:600}}>{user.en}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0",borderBottom:`1px solid ${C.border}`}}>
+          <span style={{color:C.creamDi,fontSize:13}}>Role</span><span style={{color:C.cream,fontSize:13,fontWeight:600}}>{user.role==="amir"?"Amir-e-Jamaat":user.role==="state_admin"?"State Admin":"Member"}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",padding:"8px 0"}}>
+          <span style={{color:C.creamDi,fontSize:13}}>Version</span><span style={{color:C.txtDi,fontSize:13}}>v3.0 · Apr 2025</span>
+        </div>
+      </Cd>
+
+      <Btn fn={()=>go("help")} v="dark" s={{marginBottom:10,padding:13,fontSize:14}} ch="❓ Help & FAQ"/>
+      <Btn fn={()=>go("feedback")} v="dark" s={{marginBottom:10,padding:13,fontSize:14}} ch="💌 Feedback & Support"/>
+      <Btn fn={logout} v="danger" s={{padding:13,fontSize:14}} ch="🚪 Logout"/>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   ❓ HELP & FAQ SCREEN
+══════════════════════════════════════════════════════ */
+function HelpScreen({go}){
+  const [open,setOpen]=useState(null);
+  const faqs=[
+    {q:"JAMAT app kya hai?",a:"JAMAT ek Islamic religious travel management platform hai. Jamaat groups, events (Ijtima/Jalsa), health profiles, SOS system aur real-time location updates manage karta hai."},
+    {q:"Aadhaar number safe hai?",a:"Haan. Aapka Aadhaar number UIDAI ko bheja jata hai aur turant delete ho jata hai. Sirf ek SHA-256 hash (irreversible) store hota hai. Koi bhi raw number nahi dekh sakta."},
+    {q:"Family ko SMS kab milta hai?",a:"Jab Amir location update karta hai ya SOS trigger hota hai. SMS Fast2SMS se bheja jata hai. Abhi DLT registration pending hai — jald hi real SMS start hoga."},
+    {q:"SOS kaise use karte hain?",a:"Dashboard par red 🆘 button hold karo 3 seconds. Aapke Amir aur family contact ko emergency alert jayega GPS coordinates ke saath."},
+    {q:"Health data kaun dekh sakta hai?",a:"Sirf aapka assigned Amir, aur sirf emergency mein. Har access audit-logged hota hai. Data AES-256 se encrypted hai."},
+    {q:"QR Pass kya hota hai?",a:"Event registration ke baad ek unique QR code milta hai. Venue entry par yeh scan hota hai. Ek baar hi use hota hai — tamper-proof."},
+    {q:"Attendance kaise track hoti hai?",a:"Dashboard → 🕌 Attendance tile → Daily namaz check karo. Weekly chart mein progress dikhta hai. Supabase mein save hota hai."},
+    {q:"App offline kaam karta hai?",a:"Haan — last Jamaat location, Amir contact aur QR Pass offline bhi kaam karta hai. SOS button bhi offline trigger hota hai."},
+    {q:"Koi problem hai toh kya karein?",a:"Settings → Feedback & Support se contact karo. Ya directly email karo: noorshahimohd@gmail.com"},
+  ];
+  return(
+    <div style={{padding:"0 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <div style={{padding:"20px 6px 16px"}}>
+        <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>مدد و رہنمائی</div>
+        <div style={{color:C.cream,fontSize:22,fontWeight:800}}>Help & FAQ</div>
+      </div>
+      <Cd s={{marginBottom:14,borderColor:C.goldDim,textAlign:"center"}}>
+        <div style={{color:C.gold,fontSize:14,fontFamily:"serif",direction:"rtl",lineHeight:1.9}}>وَتَعَاوَنُوا عَلَى الْبِرِّ وَالتَّقْوَى</div>
+        <div style={{color:C.creamDi,fontSize:11,marginTop:4}}>Help one another in righteousness and piety (Quran 5:2)</div>
+      </Cd>
+      {faqs.map((f,i)=>(
+        <Cd key={i} s={{marginBottom:8,cursor:"pointer",padding:14}} onClick={()=>setOpen(open===i?null:i)}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{color:open===i?C.goldHi:C.cream,fontSize:13,fontWeight:600,flex:1,paddingRight:8}}>{f.q}</div>
+            <span style={{color:C.gold,fontSize:16,flexShrink:0,transition:"transform .2s",transform:open===i?"rotate(180deg)":"rotate(0)"}}>▼</span>
+          </div>
+          {open===i&&<div style={{color:C.creamDi,fontSize:12,lineHeight:1.8,marginTop:12,paddingTop:12,borderTop:`1px solid ${C.border}`}}>{f.a}</div>}
+        </Cd>
+      ))}
+      <Cd s={{marginTop:8,textAlign:"center",borderColor:C.goldDim}}>
+        <div style={{color:C.creamDi,fontSize:12}}>Still have questions?</div>
+        <div style={{color:C.gold,fontSize:13,fontWeight:600,marginTop:4}}>noorshahimohd@gmail.com</div>
+      </Cd>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   💌 FEEDBACK & SUPPORT SCREEN
+══════════════════════════════════════════════════════ */
+function FeedbackScreen({go,user,showToast}){
+  const [type,setType]=useState("feedback");
+  const [msg,setMsg]=useState("");
+  const [rating,setRating]=useState(0);
+  const [sent,setSent]=useState(false);
+  const [loading,setLoading]=useState(false);
+
+  const send=async()=>{
+    if(msg.trim().length<10){showToast("Please write at least 10 characters","error");return;}
+    setLoading(true);
+    await DB.logNotification({type:"feedback",sender_id:user.id,sender_name:user.en,message:`[${type.toUpperCase()}][${rating}★] ${msg}`,channel:"app",lang:"en"});
+    if(BACKEND_READY) await _sb.from("notification_logs").insert({type:"user_feedback",sender_id:user.id,sender_name:user.en,message:`${type}: ${msg} (${rating}★)`,channel:"app",sent_at:new Date().toISOString()}).catch(()=>{});
+    setLoading(false);setSent(true);
+  };
+
+  if(sent) return(
+    <div style={{padding:"24px 14px",maxWidth:460,margin:"0 auto",textAlign:"center"}}>
+      <BackBtn fn={()=>go("settings")} label="Settings"/>
+      <div style={{paddingTop:40}}>
+        <div style={{fontSize:56,marginBottom:16}}>💌</div>
+        <div style={{color:C.greenBr,fontSize:22,fontWeight:700}}>Shukriya! جزاك الله</div>
+        <div style={{color:C.creamDi,fontSize:14,marginTop:8,lineHeight:1.7}}>Your feedback has been received.<br/>We will improve JAMAT with your help.</div>
+        <Btn fn={()=>go("dashboard")} v="gold" s={{marginTop:24}} ch="← Back to App"/>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <BackBtn fn={()=>go("settings")} label="Settings"/>
+      <div style={{padding:"14px 0 16px"}}>
+        <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>رائے و تعاون</div>
+        <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Feedback & Support</div>
+      </div>
+      <div style={{display:"flex",gap:8,marginBottom:16}}>
+        {[["feedback","💡 Feedback"],["bug","🐛 Bug Report"],["support","🆘 Support"]].map(([t,l])=>(
+          <button key={t} onClick={()=>setType(t)} style={{flex:1,padding:"9px 4px",borderRadius:9,border:`1.5px solid ${type===t?C.gold:C.border}`,background:type===t?C.goldDim:C.surface,color:type===t?C.goldHi:C.creamDi,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+        ))}
+      </div>
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.creamDi,fontSize:12,marginBottom:10}}>Rate your experience:</div>
+        <div style={{display:"flex",gap:8,justifyContent:"center"}}>
+          {[1,2,3,4,5].map(s=>(
+            <button key={s} onClick={()=>setRating(s)} style={{background:"none",border:"none",fontSize:28,cursor:"pointer",opacity:s<=rating?1:0.3,transition:"opacity .15s"}}>⭐</button>
+          ))}
+        </div>
+      </Cd>
+      <div style={{marginBottom:16}}>
+        <div style={{color:C.creamDi,fontSize:13,marginBottom:6,fontWeight:500}}>Your message *</div>
+        <textarea value={msg} onChange={e=>setMsg(e.target.value)} placeholder={type==="bug"?"Describe the bug — what happened, what you expected…":type==="support"?"How can we help you?":"What can we improve in JAMAT?"}
+          style={{width:"100%",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"12px 14px",color:C.cream,fontSize:14,fontFamily:"inherit",outline:"none",boxSizing:"border-box",resize:"none",minHeight:120,lineHeight:1.7,transition:"border-color .2s"}}
+          onFocus={e=>e.target.style.borderColor=C.gold} onBlur={e=>e.target.style.borderColor=C.border}/>
+        <div style={{color:C.txtDi,fontSize:10,marginTop:4}}>{msg.length} characters</div>
+      </div>
+      {loading?<Spinner/>:<Btn fn={send} v="gold" dis={msg.trim().length<10} ch="📨 Submit Feedback"/>}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   🏘️ JAMAAT LIST SCREEN
+   Browse all available jamaats
+══════════════════════════════════════════════════════ */
+function JamaatListScreen({go,user,showToast}){
+  const [jamaats,setJamaats]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [filter,setFilter]=useState("all");
+
+  const DEMO_JAMAATS=[
+    {id:"j1",en:"Tabligh Jamaat Maharashtra",name:"جماعت تبلیغ مہاراشٹرہ",amir:"Maulana Yusuf",location:"Pune Markaz",status:"travelling",members:6,departure:"15 Apr",returning:"15 May"},
+    {id:"j2",en:"Tabligh Jamaat Delhi",name:"جماعت تبلیغ دلی",amir:"Maulana Ibrahim",location:"Nizamuddin Markaz",status:"active",members:12,departure:"1 Apr",returning:"30 Apr"},
+    {id:"j3",en:"Tabligh Jamaat Rajasthan",name:"جماعت تبلیغ راجستھان",amir:"Maulana Rashid",location:"Mewat Markaz",status:"completed",members:8,departure:"1 Feb",returning:"1 Mar"},
+    {id:"j4",en:"Tabligh Jamaat Gujarat",name:"جماعت تبلیغ گجرات",amir:"Maulana Ismail",location:"Bharuch Markaz",status:"active",members:10,departure:"10 Apr",returning:"10 May"},
+  ];
+
+  useEffect(()=>{
+    setLoading(true);
+    // Load from localStorage (created jamaats) + demo
+    const created=JSON.parse(localStorage.getItem("jamat_jamaats")||"[]");
+    const all=[...DEMO_JAMAATS,...created];
+    setJamaats(all);
+    setLoading(false);
+  },[]);
+
+  const filtered=filter==="all"?jamaats:jamaats.filter(j=>j.status===filter);
+  const statusColor={travelling:C.greenBr,active:C.tealHi,completed:C.txtDi};
+  const statusLabel={travelling:"🟢 Travelling",active:"🔵 Active",completed:"✓ Completed"};
+
+  return(
+    <div style={{padding:"0 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <div style={{padding:"20px 6px 14px",display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+        <div>
+          <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>تمام جماعتیں</div>
+          <div style={{color:C.cream,fontSize:22,fontWeight:800}}>All Jamaats</div>
+        </div>
+        {(user.role==="amir"||user.role==="state_admin")&&(
+          <button onClick={()=>go("createJamaat")} style={{background:`linear-gradient(140deg,${C.goldHi},${C.gold})`,border:"none",borderRadius:10,padding:"8px 14px",color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>+ New</button>
+        )}
+      </div>
+      <div style={{display:"flex",gap:6,overflowX:"auto",marginBottom:14,paddingBottom:4}}>
+        {[["all","All"],["travelling","Travelling"],["active","Active"],["completed","Done"]].map(([f,l])=>(
+          <button key={f} onClick={()=>setFilter(f)} style={{flexShrink:0,padding:"6px 14px",borderRadius:999,border:`1px solid ${filter===f?C.gold:C.border}`,background:filter===f?C.goldDim:C.surface,color:filter===f?C.goldHi:C.creamDi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{l}</button>
+        ))}
+      </div>
+      {loading&&[1,2,3].map(i=><div key={i} className="skeleton" style={{height:100,borderRadius:14,marginBottom:10}}/>)}
+      {filtered.map(j=>(
+        <Cd key={j.id} s={{marginBottom:12,cursor:"pointer",borderLeft:`3px solid ${statusColor[j.status]||C.border}`}} onClick={()=>showToast("Tap Jamaat screen for your active jamaat","info")}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+            <div>
+              <div style={{color:C.gold,fontSize:14,fontWeight:700,direction:"rtl"}}>{j.name}</div>
+              <div style={{color:C.creamDi,fontSize:11,marginTop:1}}>{j.en}</div>
+            </div>
+            <span style={{background:(statusColor[j.status]||C.txtDi)+"22",border:`1px solid ${(statusColor[j.status]||C.txtDi)}44`,color:statusColor[j.status]||C.txtDi,padding:"2px 8px",borderRadius:999,fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>{statusLabel[j.status]||j.status}</span>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+            {[["Amir",j.amir],["Location",j.location],["Members",j.members+"👥"]].map(([k,v])=>(
+              <div key={k}><div style={{color:C.txtDi,fontSize:9}}>{k.toUpperCase()}</div><div style={{color:C.cream,fontSize:11,fontWeight:600,marginTop:1}}>{v}</div></div>
+            ))}
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+            <span style={{color:C.txtDi,fontSize:11}}>📅 {j.departure} → {j.returning}</span>
+          </div>
+        </Cd>
+      ))}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   👨‍👩‍👧 FAMILY CONTACTS SCREEN (Multiple contacts)
+══════════════════════════════════════════════════════ */
+function FamilyContactsScreen({user,go,showToast,onUpdate}){
+  const [contacts,setContacts]=useState(()=>{
+    const saved=localStorage.getItem("jamat_family_"+user.id);
+    if(saved) return JSON.parse(saved);
+    return user.family?[user.family]:[];
+  });
+  const [adding,setAdding]=useState(false);
+  const [name,setName]=useState("");
+  const [phone,setPhone]=useState("");
+  const [rel,setRel]=useState("Wife");
+
+  const save=(list)=>{
+    setContacts(list);
+    localStorage.setItem("jamat_family_"+user.id, JSON.stringify(list));
+    onUpdate&&onUpdate(list[0]);
+  };
+
+  const add=()=>{
+    if(name.trim().length<2){showToast("Enter name","error");return;}
+    if(phone.replace(/[^0-9]/g,"").length<10){showToast("Enter valid phone","error");return;}
+    if(contacts.length>=3){showToast("Maximum 3 family contacts allowed","error");return;}
+    const newContact={name:name.trim(),phone:phone.trim(),rel};
+    save([...contacts,newContact]);
+    setName("");setPhone("");setAdding(false);
+    showToast(`${name} added as family contact!`,"success");
+  };
+
+  const remove=(i)=>{
+    const updated=contacts.filter((_,idx)=>idx!==i);
+    save(updated);showToast("Contact removed","success");
+  };
+
+  return(
+    <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <BackBtn fn={()=>go("profile")} label="Profile"/>
+      <div style={{padding:"14px 0 16px",display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+        <div>
+          <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>خاندانی رابطے</div>
+          <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Family Contacts</div>
+          <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Max 3 · All receive safety notifications</div>
+        </div>
+        {contacts.length<3&&<button onClick={()=>setAdding(!adding)} style={{background:`linear-gradient(140deg,${C.goldHi},${C.gold})`,border:"none",borderRadius:10,padding:"8px 14px",color:C.bg,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>{adding?"Cancel":"+ Add"}</button>}
+      </div>
+
+      {adding&&(
+        <Cd s={{marginBottom:14,borderColor:C.gold,animation:"scaleIn .2s ease"}}>
+          <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>New Family Contact</div>
+          <Inp label="Full Name *" val={name} set={setName} ph="e.g. Fatima Ahmed"/>
+          <Inp label="Mobile Number *" val={phone} set={setPhone} ph="+91 98765 43210" type="tel"/>
+          <div style={{marginBottom:14}}>
+            <div style={{color:C.creamDi,fontSize:13,marginBottom:8,fontWeight:500}}>Relation</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+              {["Wife","Husband","Father","Mother","Son","Daughter","Brother","Sister"].map(r=>(
+                <button key={r} onClick={()=>setRel(r)} style={{padding:"5px 12px",borderRadius:8,border:`1.5px solid ${rel===r?C.gold:C.border}`,background:rel===r?C.goldDim:C.surface,color:rel===r?C.goldHi:C.creamDi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{r}</button>
+              ))}
+            </div>
+          </div>
+          <Btn fn={add} v="gold" s={{padding:12,fontSize:13}} ch="✓ Add Contact"/>
+        </Cd>
+      )}
+
+      {contacts.length===0&&(
+        <div style={{textAlign:"center",padding:"40px 20px"}}>
+          <div style={{fontSize:48,marginBottom:12}}>👨‍👩‍👧</div>
+          <div style={{color:C.creamDi,fontSize:14}}>No family contacts yet</div>
+          <div style={{color:C.txtDi,fontSize:12,marginTop:6}}>Add contacts to receive safety notifications</div>
+        </div>
+      )}
+
+      {contacts.map((c,i)=>(
+        <Cd key={i} s={{marginBottom:10,animation:"fadeIn .2s ease"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{display:"flex",gap:12,alignItems:"center"}}>
+              <div style={{width:44,height:44,borderRadius:"50%",background:`linear-gradient(135deg,${C.green},${C.teal})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:700,color:C.cream}}>{c.name[0]}</div>
+              <div>
+                <div style={{color:C.cream,fontSize:14,fontWeight:700}}>{c.name}</div>
+                <div style={{color:C.creamDi,fontSize:12,marginTop:2}}>{c.rel} · {c.phone}</div>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              <button onClick={()=>window.open(`https://wa.me/${c.phone.replace(/\D/g,"")}`)} style={{background:"#041808",border:`1px solid ${C.greenBr}`,borderRadius:8,padding:"6px 10px",color:C.greenBr,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>💬</button>
+              <button onClick={()=>remove(i)} style={{background:C.redBg,border:`1px solid ${C.red}`,borderRadius:8,padding:"6px 10px",color:C.redHi,fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+            </div>
+          </div>
+          {i===0&&<div style={{marginTop:8,paddingTop:8,borderTop:`1px solid ${C.border}`,color:C.greenBr,fontSize:10}}>✓ Primary contact · Receives all notifications</div>}
+        </Cd>
+      ))}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   📅 EVENT COUNTDOWN + WAITLIST
+   Enhanced Event Detail with countdown timer
+══════════════════════════════════════════════════════ */
+function EventCountdown({eventDate}){
+  const [timeLeft,setTimeLeft]=useState({days:0,hours:0,mins:0});
+  useEffect(()=>{
+    const calc=()=>{
+      // Parse event date (e.g. "May 10-12, 2025")
+      const parts=eventDate.split(",");
+      const yearStr=parts[parts.length-1]?.trim();
+      const monthDay=parts[0]?.split(" ");
+      const month=monthDay?.[0];
+      const day=parseInt(monthDay?.[1]?.split("–")[0]||"1");
+      const target=new Date(`${month} ${day}, ${yearStr}`);
+      const now=new Date();
+      const diff=target-now;
+      if(diff>0){
+        setTimeLeft({days:Math.floor(diff/86400000),hours:Math.floor((diff%86400000)/3600000),mins:Math.floor((diff%3600000)/60000)});
+      }
+    };
+    calc();
+    const t=setInterval(calc,60000);
+    return()=>clearInterval(t);
+  },[eventDate]);
+
+  if(timeLeft.days===0&&timeLeft.hours===0) return null;
+  return(
+    <div style={{background:C.goldDim,border:`1px solid ${C.gold}`,borderRadius:10,padding:"10px 14px",marginBottom:12,display:"flex",gap:16,justifyContent:"center",alignItems:"center"}}>
+      {[["days","Days"],["hours","Hrs"],["mins","Min"]].map(([k,l])=>(
+        <div key={k} style={{textAlign:"center"}}>
+          <div style={{color:C.goldHi,fontSize:24,fontWeight:900,lineHeight:1}}>{timeLeft[k]}</div>
+          <div style={{color:C.gold,fontSize:9,letterSpacing:1,marginTop:2}}>{l.toUpperCase()}</div>
+        </div>
+      ))}
+      <div style={{color:C.gold,fontSize:12,marginLeft:4}}>until event</div>
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   🔄 AMIR HANDOVER SCREEN
+══════════════════════════════════════════════════════ */
+function AmirHandoverScreen({go,user,showToast}){
+  const [newAmir,setNewAmir]=useState("");
+  const [reason,setReason]=useState("");
+  const [loading,setLoading]=useState(false);
+  const [done,setDone]=useState(false);
+
+  const handover=async()=>{
+    if(!newAmir.trim()){showToast("Enter new Amir name","error");return;}
+    setLoading(true);
+    await DB.logNotification({type:"audit",sender_name:user.en,message:`Amir handover: ${user.en} → ${newAmir}. Reason: ${reason}`,channel:"app",lang:"en"});
+    setLoading(false);setDone(true);
+    showToast("Amir handover recorded!","success");
+  };
+
+  if(done) return(
+    <div style={{padding:"24px 14px",textAlign:"center",maxWidth:460,margin:"0 auto"}}>
+      <BackBtn fn={()=>go("jamaat")} label="Jamaat"/>
+      <div style={{paddingTop:40}}>
+        <div style={{fontSize:56,marginBottom:12}}>🏛️</div>
+        <div style={{color:C.greenBr,fontSize:20,fontWeight:700}}>Handover Recorded</div>
+        <div style={{color:C.creamDi,fontSize:13,marginTop:8}}>New Amir: <strong style={{color:C.gold}}>{newAmir}</strong></div>
+        <div style={{color:C.txtDi,fontSize:11,marginTop:4}}>Audit log updated. Admin notified.</div>
+      </div>
+    </div>
+  );
+
+  return(
+    <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <BackBtn fn={()=>go("jamaat")} label="Jamaat"/>
+      <div style={{padding:"14px 0 16px"}}>
+        <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>امارت کی منتقلی</div>
+        <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Amir Handover</div>
+        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Transfer Amarat to another member</div>
+      </div>
+      <Cd s={{marginBottom:14,borderColor:C.amber,background:"#1a0e04"}}>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <span style={{fontSize:20}}>⚠️</span>
+          <div style={{color:C.amberHi,fontSize:12}}>This action is permanent and logged. Current Amir: <strong>{user.en}</strong></div>
+        </div>
+      </Cd>
+      <Inp label="New Amir Name *" val={newAmir} set={setNewAmir} ph="Name of new Amir-e-Jamaat"/>
+      <div style={{marginBottom:16}}>
+        <div style={{color:C.creamDi,fontSize:13,marginBottom:6,fontWeight:500}}>Reason for handover</div>
+        <textarea value={reason} onChange={e=>setReason(e.target.value)} placeholder="e.g. Travel, health reason, mutual decision..."
+          style={{width:"100%",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:10,padding:"12px 14px",color:C.cream,fontSize:14,fontFamily:"inherit",outline:"none",boxSizing:"border-box",resize:"none",height:80,lineHeight:1.7}}
+          onFocus={e=>e.target.style.borderColor=C.gold} onBlur={e=>e.target.style.borderColor=C.border}/>
+      </div>
+      {loading?<Spinner/>:<Btn fn={handover} v="amber" dis={!newAmir.trim()} ch="🏛️ Confirm Amir Handover"/>}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   🆘 SOS HISTORY SCREEN
+══════════════════════════════════════════════════════ */
+function SOSHistoryScreen({go,user}){
+  const [logs,setLogs]=useState([]);
+  const [loading,setLoading]=useState(true);
+
+  useEffect(()=>{
+    DB.getNotifLogs(user.id).then(d=>{
+      setLogs((d||[]).filter(l=>l.type==="sos"));
+      setLoading(false);
+    });
+  },[]);
+
+  return(
+    <div style={{padding:"0 14px 100px",maxWidth:460,margin:"0 auto",animation:"fadeIn .3s ease"}}>
+      <BackBtn fn={()=>go("dashboard")} label="Dashboard"/>
+      <div style={{padding:"14px 0 16px"}}>
+        <div style={{color:C.redHi,fontSize:12,direction:"rtl",marginBottom:2}}>ایمرجنسی تاریخ</div>
+        <div style={{color:C.cream,fontSize:20,fontWeight:800}}>SOS History</div>
+        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>{logs.length} emergency alerts triggered</div>
+      </div>
+      {loading&&[1,2].map(i=><div key={i} className="skeleton" style={{height:80,borderRadius:14,marginBottom:10}}/>)}
+      {!loading&&logs.length===0&&(
+        <div style={{textAlign:"center",padding:"48px 20px"}}>
+          <div style={{fontSize:48,marginBottom:12}}>🟢</div>
+          <div style={{color:C.greenBr,fontSize:16,fontWeight:700}}>Alhamdulillah!</div>
+          <div style={{color:C.creamDi,fontSize:13,marginTop:6}}>No SOS alerts triggered. All safe!</div>
+        </div>
+      )}
+      {logs.map((l,i)=>(
+        <Cd key={i} s={{marginBottom:10,borderColor:C.red,borderLeft:`3px solid ${C.redHi}`}}>
+          <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
+            <span style={{fontSize:24}}>🆘</span>
+            <div style={{flex:1}}>
+              <div style={{display:"flex",justifyContent:"space-between"}}>
+                <span style={{color:C.redHi,fontSize:13,fontWeight:700}}>Emergency Alert</span>
+                <span style={{color:C.txtDi,fontSize:11}}>{l.sent_at?new Date(l.sent_at).toLocaleDateString("en-IN"):""}</span>
+              </div>
+              <div style={{color:C.creamDi,fontSize:11,marginTop:4,direction:"rtl",lineHeight:1.7}}>{l.message?.slice(0,100)}</div>
+              <div style={{color:C.txtDi,fontSize:10,marginTop:4}}>Sent by: {l.sender_name}</div>
+            </div>
+          </div>
+        </Cd>
+      ))}
+    </div>
+  );
+}
+
+
 function BottomNav({active,go}){
   const items=[
     {id:"dashboard",icon:"🏠",label:"Home"},
@@ -3585,7 +4174,7 @@ function App(){
     if(screen==="events")return <Events user={user} go={go} setEvt={setSelEvt} events={events}/>;
     if(screen==="eventDetail"&&selEvt)return <EventDetail ev={selEvt} user={user} onBack={()=>go("events")} onQR={()=>go("qr")} onRegister={handleRegister}/>;
     if(screen==="qr")return <QRPass user={user} ev={selEvt||events.find(e=>e.mine==="registered")||events[0]} onBack={()=>go(selEvt?"eventDetail":"dashboard")}/>;
-    if(screen==="ledger")return <Ledger user={user} go={go} ledger={ledger}/>;
+    if(screen==="ledger")return <Ledger user={user} go={go} ledger={ledger} showToast={showToast}/>;
     if(screen==="profile")return <Profile user={user} go={go} onRoleChange={handleRoleChange} showToast={showToast} onPhotoChange={p=>{setUserPhoto(p);}}/>;
     if(screen==="qrscan")return <QRScanner go={go} showToast={showToast}/>;
     if(screen==="attendance")return <AttendanceScreen user={user} go={go} showToast={showToast}/>;
@@ -3604,6 +4193,13 @@ function App(){
     if(screen==="search")return <SearchScreen go={go} events={events} ledger={ledger} setEvt={setSelEvt}/>;
     if(screen==="createJamaat")return <CreateJamaatScreen go={go} user={user} showToast={showToast}/>;
     if(screen==="memberProfile"&&selMember)return <MemberProfile member={selMember} go={go} user={user} showToast={showToast}/>;
+    if(screen==="settings")return <SettingsScreen go={go} user={user} onRoleChange={handleRoleChange} showToast={showToast}/>;
+    if(screen==="help")return <HelpScreen go={go}/>;
+    if(screen==="feedback")return <FeedbackScreen go={go} user={user} showToast={showToast}/>;
+    if(screen==="jamaatList")return <JamaatListScreen go={go} user={user} showToast={showToast}/>;
+    if(screen==="familyContacts")return <FamilyContactsScreen user={user} go={go} showToast={showToast} onUpdate={c=>setUser(p=>({...p,family:c}))}/>;
+    if(screen==="amirHandover")return <AmirHandoverScreen go={go} user={user} showToast={showToast}/>;
+    if(screen==="sosHistory")return <SOSHistoryScreen go={go} user={user}/>;
     return <Dashboard user={user} go={go} events={events} onArrived={handleArrived}/>;
   };
 
