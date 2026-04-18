@@ -184,20 +184,31 @@ const FAST2SMS_KEY = "SaJtrWEklAZ951O8TcpqQoCIbVK6nD3wLYH7M2UFmXiByGxNvR4pSRsmAf
 
 const SMS = {
 
-  // Send SMS to one number
+  // Send SMS via Supabase Edge Function (avoids CORS)
   async send(phone, message) {
-    // Clean phone number — remove +91, spaces, dashes
     const num = phone.replace(/[^0-9]/g,"").slice(-10);
     if(num.length !== 10) { console.warn("Invalid phone:", phone); return {ok:false}; }
 
     try {
-      const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_KEY}&route=q&message=${encodeURIComponent(message)}&language=unicode&flash=0&numbers=${num}`;
-      const res = await fetch(url);
+      // Call Supabase Edge Function (server-side, no CORS issue)
+      const res = await fetch(
+        "https://xpkfagerukqbvzgpqsmj.supabase.co/functions/v1/send-sms",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${SUPABASE_KEY}`,
+          },
+          body: JSON.stringify({ phone: num, message }),
+        }
+      );
       const data = await res.json();
-      console.log("SMS sent:", data);
-      return { ok: data.return === true, data };
+      console.log("SMS result:", data);
+      return { ok: data.ok === true, data };
     } catch(e) {
       console.error("SMS error:", e);
+      // Log to DB even if SMS fails
+      await DB.logNotification({type:"sms_error",sender_name:"system",message:e.message,channel:"sms"});
       return { ok: false, error: e.message };
     }
   },
