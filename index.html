@@ -329,13 +329,13 @@ const tick = (
   </svg>
 );
 
-const Cd = ({ch,s={},onClick,glow,danger}) => (
+const Cd = ({ch,children,s={},onClick,glow,danger}) => (
   <div onClick={onClick} style={{
     background:danger?C.redBg:C.card,
     border:`1px solid ${glow?C.goldDim:danger?C.red:C.border}`,
     borderRadius:16,padding:16,cursor:onClick?"pointer":undefined,
     transition:"all .2s",boxShadow:glow?`0 0 18px ${C.gold}18`:"none",...s
-  }}>{ch}</div>
+  }}>{ch||children}</div>
 );
 
 const Btn = ({ch,fn,v="primary",s={},dis}) => {
