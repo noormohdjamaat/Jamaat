@@ -24,9 +24,9 @@ const { useState, useEffect, useRef, useCallback } = React;
    SUPABASE CONFIG — Fill in your project details
    Get these from: supabase.com → Project Settings → API
 ══════════════════════════════════════════════════════ */
-const SUPABASE_URL  = "https://YOUR_PROJECT_ID.supabase.co";
-const SUPABASE_KEY  = "YOUR_ANON_PUBLIC_KEY";
-const BACKEND_READY = SUPABASE_URL !== "https://YOUR_PROJECT_ID.supabase.co";
+const SUPABASE_URL  = localStorage.getItem("jamat_sb_url") || "https://YOUR_PROJECT_ID.supabase.co";
+const SUPABASE_KEY  = localStorage.getItem("jamat_sb_key") || "YOUR_ANON_PUBLIC_KEY";
+const BACKEND_READY = !!(localStorage.getItem("jamat_sb_key") && localStorage.getItem("jamat_sb_url") && localStorage.getItem("jamat_sb_url") !== "https://YOUR_PROJECT_ID.supabase.co");
 
 const _sb = BACKEND_READY
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -2055,7 +2055,22 @@ function AddMember({go,showToast}){
 /* ══════════════════════════════════════════════════════
    SCREEN: SUPABASE SETUP GUIDE
 ══════════════════════════════════════════════════════ */
-function SetupScreen({go}){
+function SetupScreen({go,showToast}){
+  const [sbUrl,setSbUrl]=useState(localStorage.getItem("jamat_sb_url")||"https://xpkfagerukqbvzgpqsmj.supabase.co");
+  const [sbKey,setSbKey]=useState(localStorage.getItem("jamat_sb_key")||"");
+  const [saved,setSaved]=useState(false);
+
+  const saveKeys=()=>{
+    if(!sbUrl.includes("supabase.co")||sbKey.length<20){
+      showToast("URL ya Key galat hai","error");return;
+    }
+    localStorage.setItem("jamat_sb_url",sbUrl.trim());
+    localStorage.setItem("jamat_sb_key",sbKey.trim());
+    setSaved(true);
+    showToast("✓ Supabase connected! Page reload ho raha hai…","success");
+    setTimeout(()=>window.location.reload(),1800);
+  };
+
   const SQL=`-- Run this in Supabase SQL Editor
 
 -- 1. Blacklisted identities
@@ -2116,7 +2131,7 @@ CREATE POLICY "public_all" ON notification_logs FOR ALL USING (true) WITH CHECK 
       <div style={{padding:"14px 0 16px"}}>
         <div style={{color:C.gold,fontSize:12,marginBottom:2}}>🗄️ Backend Setup</div>
         <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Connect Supabase</div>
-        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Free forever · 5 minutes · No server needed</div>
+        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Free forever · No server needed</div>
       </div>
 
       {/* Status */}
@@ -2124,25 +2139,50 @@ CREATE POLICY "public_all" ON notification_logs FOR ALL USING (true) WITH CHECK 
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <span style={{fontSize:22}}>{BACKEND_READY?"✅":"⚙️"}</span>
           <div>
-            <div style={{color:BACKEND_READY?C.greenBr:C.amberHi,fontSize:13,fontWeight:700}}>{BACKEND_READY?"Supabase Connected!":"Not Connected — Using localStorage"}</div>
-            <div style={{color:C.txtDi,fontSize:11,marginTop:2}}>{BACKEND_READY?"Health, blacklist, notifications → live database":"All data saved locally on this device only"}</div>
+            <div style={{color:BACKEND_READY?C.greenBr:C.amberHi,fontSize:13,fontWeight:700}}>{BACKEND_READY?"Supabase Connected! 🎉":"Not Connected — Using localStorage"}</div>
+            <div style={{color:C.txtDi,fontSize:11,marginTop:2}}>{BACKEND_READY?"All 3 tables live — health, blacklist, notifications":"Data saves on this device only"}</div>
           </div>
         </div>
       </Cd>
 
+      {/* KEY INPUT — Main section */}
+      <Cd s={{marginBottom:16,borderColor:C.gold,background:"#0d1e10"}}>
+        <div style={{color:C.gold,fontSize:13,fontWeight:700,marginBottom:4}}>🔑 Step 1 — Anon Key Yahan Paste Karo</div>
+        <div style={{color:C.txtDi,fontSize:11,marginBottom:14,lineHeight:1.7}}>
+          Supabase → jamat project → left menu mein "API" → "Project API keys" section → <strong style={{color:C.cream}}>anon public</strong> → Copy
+        </div>
+        <div style={{marginBottom:12}}>
+          <div style={{color:C.creamDi,fontSize:12,marginBottom:6}}>Project URL (already filled)</div>
+          <input value={sbUrl} onChange={e=>setSbUrl(e.target.value)}
+            style={{width:"100%",background:C.surface,border:`1.5px solid ${C.border}`,borderRadius:9,padding:"11px 12px",color:C.cream,fontSize:12,fontFamily:"monospace",outline:"none",boxSizing:"border-box"}}/>
+        </div>
+        <div style={{marginBottom:14}}>
+          <div style={{color:C.creamDi,fontSize:12,marginBottom:6}}>Anon Public Key <span style={{color:C.redHi}}>*</span></div>
+          <textarea value={sbKey} onChange={e=>setSbKey(e.target.value)}
+            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+            style={{width:"100%",background:C.surface,border:`1.5px solid ${sbKey?"#2c6040":C.border}`,borderRadius:9,padding:"11px 12px",color:C.cream,fontSize:11,fontFamily:"monospace",outline:"none",boxSizing:"border-box",resize:"none",height:80,lineHeight:1.5}}/>
+          <div style={{color:C.txtDi,fontSize:10,marginTop:4}}>Ye code eyJhbGci... se shuru hoga — bahut lamba hoga</div>
+        </div>
+        {saved
+          ?<div style={{textAlign:"center",color:C.greenBr,fontSize:13,fontWeight:700,padding:12}}>✓ Saved! Reloading…</div>
+          :<button onClick={saveKeys} style={{width:"100%",padding:"14px",background:`linear-gradient(140deg,${C.goldHi},${C.gold})`,border:"none",borderRadius:10,color:C.bg,fontSize:14,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            ✓ Save & Connect Supabase
+          </button>
+        }
+      </Cd>
+
       {/* Steps */}
       {[
-        {n:"1",title:"Create Supabase Account",body:"Go to supabase.com → Sign up free → Create New Project\nChoose region: Asia South (Mumbai)",link:"https://supabase.com",btn:"Open Supabase →"},
-        {n:"2",title:"Run SQL Schema",body:"In Supabase → SQL Editor → paste the schema below → Run",link:null,btn:null},
-        {n:"3",title:"Get API Keys",body:"Supabase → Project Settings → API\nCopy: Project URL and anon public key",link:null,btn:null},
-        {n:"4",title:"Update index.html",body:`In your GitHub repo, edit index.html\nFind line:\nconst SUPABASE_URL = "https://YOUR_PROJECT_ID..."\n\nReplace with your actual URL and key`,link:null,btn:null},
+        {n:"1",title:"Supabase → jamat → Left menu → API",body:"Supabase.com → jamat project → left side panel mein 'API' dhundo",link:"https://supabase.com/dashboard/project/xpkfagerukqbvzgpqsmj/api",btn:"API Page Kholo →"},
+        {n:"2",title:"anon public key copy karo",body:"API page par 'Project API keys' section mein\nanon  public  [eyJhbG...]  Copy\n\nCopy tap karo → upar box mein paste karo"},
+        {n:"3",title:"SQL Tables banao",body:"Supabase → SQL Editor → neeche SQL paste karo → Run and enable RLS dabao"},
       ].map(s=>(
-        <Cd key={s.n} s={{marginBottom:12,borderLeft:`3px solid ${C.gold}`}}>
+        <Cd key={s.n} s={{marginBottom:10,borderLeft:`3px solid ${C.gold}`}}>
           <div style={{display:"flex",gap:10,alignItems:"flex-start"}}>
-            <div style={{width:28,height:28,borderRadius:"50%",background:C.goldDim,border:`1.5px solid ${C.gold}`,display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:14,fontWeight:800,flexShrink:0}}>{s.n}</div>
+            <div style={{width:26,height:26,borderRadius:"50%",background:C.goldDim,border:`1.5px solid ${C.gold}`,display:"flex",alignItems:"center",justifyContent:"center",color:C.gold,fontSize:13,fontWeight:800,flexShrink:0}}>{s.n}</div>
             <div style={{flex:1}}>
-              <div style={{color:C.cream,fontSize:13,fontWeight:700,marginBottom:6}}>{s.title}</div>
-              <div style={{color:C.creamDi,fontSize:12,lineHeight:1.7,whiteSpace:"pre-line"}}>{s.body}</div>
+              <div style={{color:C.cream,fontSize:13,fontWeight:700,marginBottom:4}}>{s.title}</div>
+              <div style={{color:C.creamDi,fontSize:11,lineHeight:1.7,whiteSpace:"pre-line"}}>{s.body}</div>
               {s.link&&<button onClick={()=>window.open(s.link,"_blank")} style={{marginTop:8,background:C.goldDim,border:`1px solid ${C.gold}`,borderRadius:8,padding:"6px 14px",color:C.goldHi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>{s.btn}</button>}
             </div>
           </div>
@@ -2296,7 +2336,7 @@ function App(){
     if(screen==="card")return <DigitalCard user={user} go={go}/>;
     if(screen==="map")return <MapView go={go}/>;
     if(screen==="admin")return <Admin go={go} showToast={showToast}/>;
-    if(screen==="setup")return <SetupScreen go={go}/>;
+    if(screen==="setup")return <SetupScreen go={go} showToast={showToast}/>;
     if(screen==="amal")return <AmalScreen go={go} user={user}/>;
     if(screen==="addMember")return <AddMember go={go} showToast={showToast}/>;
     if(screen==="health")return <HealthScreen user={user} go={go} showToast={showToast}/>;
