@@ -8,10 +8,14 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
-    html,body{background:#060e09;height:100%;overscroll-behavior:none}
+    html,body{height:100%;overscroll-behavior:none}
+    html[data-theme="light"],html[data-theme="light"] body{background:#f0ede6!important}
     #root{height:100%}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .fade-in{animation:fadeIn .3s ease}
   </style>
 </head>
 <body>
@@ -27,6 +31,12 @@ const { useState, useEffect, useRef, useCallback } = React;
 const SUPABASE_URL  = localStorage.getItem("jamat_sb_url") || "https://xpkfagerukqbvzgpqsmj.supabase.co";
 const SUPABASE_KEY  = localStorage.getItem("jamat_sb_key") || "sb_publishable_2Bxsg16faQp66irCSUolzw_rzOdOWlX";
 const BACKEND_READY = true;
+
+/* ── THEME SYSTEM ── */
+const THEME_KEY = "jamat_theme";
+function getTheme(){ return localStorage.getItem(THEME_KEY)||"dark"; }
+function setTheme(t){ localStorage.setItem(THEME_KEY,t); document.documentElement.setAttribute("data-theme",t); }
+setTheme(getTheme()); // apply on load
 
 const _sb = BACKEND_READY
   ? window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY)
@@ -151,6 +161,98 @@ const DB = {
   },
 
   /* ── HUMANIZED TEMPLATE RENDERER ──────────────── */
+  /* ── USERS (Real Registration) ─────────────── */
+  async registerUser(data) {
+    const ls = JSON.parse(localStorage.getItem("jamat_users")||"[]");
+    const exists = ls.find(u=>u.phone===data.phone);
+    if(exists) return {ok:false, error:"Phone already registered"};
+    const user = {...data, id:"u_"+Date.now(), role:"member", verified:false, createdAt:new Date().toISOString()};
+    ls.push(user);
+    localStorage.setItem("jamat_users", JSON.stringify(ls));
+    if(BACKEND_READY){
+      await _sb.from("users_app").upsert({...user, aadhaar_hash: await sha256Hash(data.phone)});
+    }
+    return {ok:true, user};
+  },
+
+  async loginUser(phone) {
+    // Check localStorage first
+    const ls = JSON.parse(localStorage.getItem("jamat_users")||"[]");
+    const found = ls.find(u=>u.phone.replace(/\D/g,"").slice(-10)===phone.replace(/\D/g,"").slice(-10));
+    if(found) return {ok:true, user:found};
+    if(BACKEND_READY){
+      const {data} = await _sb.from("users_app").select("*").eq("phone",phone).maybeSingle();
+      if(data){
+        ls.push(data);
+        localStorage.setItem("jamat_users",JSON.stringify(ls));
+        return {ok:true, user:data};
+      }
+    }
+    return {ok:false};
+  },
+
+  /* ── EVENT REGISTRATIONS ───────────────────── */
+  async getMyRegistrations(userId) {
+    const lsKey = "jamat_regs_"+userId;
+    const ls = JSON.parse(localStorage.getItem(lsKey)||"[]");
+    if(BACKEND_READY){
+      const {data} = await _sb.from("event_registrations").select("event_id").eq("user_id",userId);
+      if(data) return data.map(d=>d.event_id);
+    }
+    return ls;
+  },
+
+  async registerEvent(userId, eventId) {
+    const lsKey = "jamat_regs_"+userId;
+    const ls = JSON.parse(localStorage.getItem(lsKey)||"[]");
+    if(!ls.includes(eventId)){ls.push(eventId); localStorage.setItem(lsKey,JSON.stringify(ls));}
+    if(BACKEND_READY){
+      await _sb.from("event_registrations").upsert({user_id:userId,event_id:eventId,registered_at:new Date().toISOString()});
+    }
+    return {ok:true};
+  },
+
+  /* ── ATTENDANCE ─────────────────────────────── */
+  async getAttendance(userId, date) {
+    const key = `jamat_att_${userId}_${date}`;
+    const ls = JSON.parse(localStorage.getItem(key)||"{}");
+    if(BACKEND_READY){
+      const {data} = await _sb.from("attendance").select("*").eq("user_id",userId).eq("date",date).maybeSingle();
+      if(data) return data;
+    }
+    return ls;
+  },
+
+  async saveAttendance(userId, date, prayers) {
+    const key = `jamat_att_${userId}_${date}`;
+    localStorage.setItem(key, JSON.stringify({...prayers, date, user_id:userId}));
+    if(BACKEND_READY){
+      await _sb.from("attendance").upsert({user_id:userId, date, ...prayers, updated_at:new Date().toISOString()});
+    }
+    return {ok:true};
+  },
+
+  async getAttendanceHistory(userId, days=7) {
+    const result = [];
+    for(let i=0;i<days;i++){
+      const d = new Date(); d.setDate(d.getDate()-i);
+      const dateStr = d.toISOString().split("T")[0];
+      const att = await this.getAttendance(userId, dateStr);
+      result.push({date:dateStr, ...att});
+    }
+    return result;
+  },
+
+  /* ── PROFILE PHOTO ──────────────────────────── */
+  async savePhoto(userId, base64) {
+    localStorage.setItem(`jamat_photo_${userId}`, base64);
+    if(BACKEND_READY){
+      await _sb.from("users_app").upsert({id:userId, photo:base64});
+    }
+    return {ok:true};
+  },
+  getPhoto(userId){ return localStorage.getItem(`jamat_photo_${userId}`)||null; },
+
   buildMessage(type, vars, lang = "ur") {
     const now = new Date().toLocaleString("en-IN");
     const templates = {
@@ -275,6 +377,15 @@ const C = {
   amber:"#c07820", amberHi:"#e09030",
 };
 
+// Light theme overrides applied via CSS when data-theme="light"
+const CL = {
+  bg:"#f5f0e8", surface:"#ede6d6", card:"#e8dfc8",
+  border:"#c8b890", borderBr:"#b09060",
+  cream:"#1a1000", creamDi:"#4a3810",
+  txt:"#2a1a00", txtDi:"#7a6040", txtMu:"#c0a870",
+  gold:"#8a5a00",
+};
+
 /* ══════════════════════════════════════════════════════
    MOCK DATA
 ══════════════════════════════════════════════════════ */
@@ -347,6 +458,15 @@ const AUDIT_LOG = [
 ];
 
 const NOTIF_TEMPLATES = {
+  reminder: {
+    ur: "📿 یاد دہانی\n{{name}} bhai, {{prayer}} ki namaz ka waqt ho gaya\nجماعت: {{jamaat}}\n\nاللہ قبول فرمائے 🤲",
+    en: "📿 Reminder\n{{name}}, time for {{prayer}} prayer\nJamaat: {{jamaat}}\n\nMay Allah accept! 🤲",
+  },
+  welcome: {
+    ur: "السلام علیکم {{name}} 🌙\nآپ کا JAMAT میں خیر مقدم ہے\nعزت · حفاظت · نظام",
+    en: "Assalamu Alaikum {{name}} 🌙\nWelcome to JAMAT Platform\nIzzat · Hifazat · Nizaam",
+  },
+
   arrival: {
     ur: "🌿 الحمدللہ\n{{name}} خیریت سے {{location}} پہنچ گئے\nجماعت: {{jamaat}}\nوقت: {{time}} · پن کوڈ: {{pincode}}\n\nاللہ تعالیٰ حفاظت فرمائیں 🤲",
     en: "🌿 Alhamdulillah\n{{name}} has safely reached {{location}}\nJamaat: {{jamaat}} · Time: {{time}}\n\nMay Allah keep them safe 🤲",
@@ -545,6 +665,7 @@ function Splash({done}){
 const BANNED_AADHAAR = "1234 5678 9999"; // demo banned number
 
 function Login({onLogin}){
+  const [mode,setMode]=useState("login"); // login | register
   const [step,setStep]=useState("num");
   const [num,setNum]=useState("");
   const [otp,setOtp]=useState(["","","","","",""]);
@@ -574,11 +695,40 @@ function Login({onLogin}){
     if(v&&i<5)refs.current[i+1]?.focus();
   };
   const otpKey=(i,e)=>{if(e.key==="Backspace"&&!otp[i]&&i>0)refs.current[i-1]?.focus();};
-  const verify=()=>{
+  const [regName,setRegName]=useState("");
+  const [regPhone,setRegPhone]=useState("");
+  const [regCity,setRegCity]=useState("");
+  const [regLoading,setRegLoading]=useState(false);
+
+  const verify=async()=>{
     if(otp.join("").length<6){setErr("Enter 6-digit OTP");return;}
     setErr("");setLoading(true);
-    setTimeout(()=>{setLoading(false);onLogin(USERS[demo]);},1600);
+    // Try to find real registered user first
+    const phone=num.replace(/\s/g,"");
+    const found=await DB.loginUser(phone);
+    setTimeout(()=>{
+      setLoading(false);
+      if(found.ok) onLogin({...found.user,name:found.user.name||found.user.en,en:found.user.en||found.user.name});
+      else onLogin(USERS[demo]);
+    },800);
   };
+
+  const register=async()=>{
+    if(regName.trim().length<2){setErr("Enter your full name");return;}
+    if(regPhone.replace(/[^0-9]/g,"").length<10){setErr("Enter valid 10-digit phone");return;}
+    setRegLoading(true);setErr("");
+    const r=await DB.registerUser({
+      en:regName.trim(), name:regName.trim(),
+      phone:regPhone.trim(), city:regCity.trim()||"India",
+      role:"member", lang:"ur", verified:false,
+      bloodGroup:"", hasMedical:false, family:null
+    });
+    setRegLoading(false);
+    if(r.ok){ setMode("login"); setNum(regPhone.replace(/[^0-9]/g,"").slice(-10)); setErr(""); showRegSuccess(true); }
+    else setErr(r.error||"Registration failed");
+  };
+
+  const [regSuccess,showRegSuccess]=useState(false);
 
   if(blocked) return(
     <div style={{minHeight:"100vh",background:C.redBg,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:24}}>
@@ -615,6 +765,27 @@ function Login({onLogin}){
           <div style={{fontSize:36,fontWeight:900,letterSpacing:5,background:`linear-gradient(135deg,${C.gold},${C.greenBr})`,WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>JAMAT</div>
           <div style={{color:C.creamDi,fontSize:11,letterSpacing:3,marginTop:4}}>جماعت مینجمنٹ پلیٹ فارم</div>
         </div>
+
+        {/* Mode toggle */}
+        <div style={{display:"flex",background:C.surface,borderRadius:12,padding:4,marginBottom:20,gap:3}}>
+          {[["login","🔐 Login"],["register","📝 Register"]].map(([m,l])=>(
+            <button key={m} onClick={()=>{setMode(m);setErr("");}} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",background:mode===m?C.gold:"transparent",color:mode===m?C.bg:C.creamDi,fontSize:13,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all .2s"}}>{l}</button>
+          ))}
+        </div>
+
+        {regSuccess&&<div style={{background:"#041808",border:`1px solid ${C.greenBr}`,borderRadius:10,padding:"10px 14px",marginBottom:16,color:C.greenBr,fontSize:13,fontWeight:600}}>✓ Registered! Ab login karo.</div>}
+
+        {mode==="register"?(
+          <div>
+            <div style={{color:C.gold,fontSize:17,fontWeight:700,marginBottom:16}}>Create Account</div>
+            <Inp label="Full Name" val={regName} set={setRegName} ph="e.g. Mohammed Ahmed"/>
+            <Inp label="Mobile Number" val={regPhone} set={setRegPhone} ph="+91 98765 43210" type="tel" kb="tel"/>
+            <Inp label="City" val={regCity} set={setRegCity} ph="e.g. Mumbai"/>
+            {err&&<div style={{color:C.redHi,fontSize:13,marginBottom:12}}>⚠ {err}</div>}
+            {regLoading?<Spinner/>:<Btn fn={register} v="gold" ch="✓ Create Account"/>}
+          </div>
+        ):(
+        <>
 
         {/* Demo switcher */}
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,padding:14,marginBottom:24}}>
@@ -664,6 +835,8 @@ function Login({onLogin}){
             {err&&<div style={{color:C.redHi,fontSize:13,marginBottom:12}}>⚠ {err}</div>}
             {loading?<Spinner/>:<Btn fn={verify} v="gold" ch="✓ Verify & Sign In"/>}
           </>
+        )}
+        </>
         )}
       </div>
     </div>
@@ -800,7 +973,8 @@ function Dashboard({user,go,events,onArrived}){
     {icon:"🪪",label:"QR Pass",screen:"qr"},
     {icon:"📜",label:"History",screen:"ledger"},
     {icon:"❤️",label:"Health",screen:"health"},
-    ...(isAmir?[{icon:"📍",label:"Update Loc",screen:"location"}]:[{icon:"🗺️",label:"Live Map",screen:"map"}]),
+    {icon:"🕌",label:"Attendance",screen:"attendance"},
+    ...(isAmir?[{icon:"📍",label:"Update Loc",screen:"location"},{icon:"📷",label:"Scan QR",screen:"qrscan"}]:[{icon:"🗺️",label:"Live Map",screen:"map"},{icon:"📷",label:"Scan QR",screen:"qrscan"}]),
     {icon:"🖼️",label:"My Card",screen:"card"},
     ...(isAdmin?[{icon:"📊",label:"Admin",screen:"admin"}]:[]),
   ];
@@ -1774,7 +1948,8 @@ function Ledger({user,go,ledger}){
 /* ══════════════════════════════════════════════════════
    SCREEN: PROFILE (with working edit)
 ══════════════════════════════════════════════════════ */
-function Profile({user,go,onRoleChange,showToast}){
+function Profile({user,go,onRoleChange,showToast,onPhotoChange}){
+  const [photo,setPhoto]=useState(DB.getPhoto(user.id));
   const [editingFamily,setEditingFamily]=useState(false);
   const [famName,setFamName]=useState(user.family?.name||"");
   const [famPhone,setFamPhone]=useState(user.family?.phone||"");
@@ -1790,8 +1965,19 @@ function Profile({user,go,onRoleChange,showToast}){
     <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
       <div style={{textAlign:"center",padding:"20px 0 24px"}}>
         <div style={{position:"relative",display:"inline-block",marginBottom:12}}>
-          <Av name={user.en} size={72}/>
-          <div style={{position:"absolute",bottom:2,right:2}}>{tick}</div>
+          <div style={{width:72,height:72,borderRadius:"50%",border:`2px solid ${C.gold}`,overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",background:`linear-gradient(135deg,${C.green},${C.teal})`}}>
+            {photo?<img src={photo} style={{width:"100%",height:"100%",objectFit:"cover"}} alt="profile"/>:<span style={{fontSize:28,fontWeight:700,color:C.cream}}>{user.en[0]}</span>}
+          </div>
+          <label style={{position:"absolute",bottom:0,right:0,width:24,height:24,borderRadius:"50%",background:C.gold,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",fontSize:12,border:`2px solid ${C.bg}`}}>
+            📷<input type="file" accept="image/*" capture="user" style={{display:"none"}} onChange={e=>{
+              const file=e.target.files[0];
+              if(!file)return;
+              const reader=new FileReader();
+              reader.onload=ev=>{const b64=ev.target.result;setPhoto(b64);DB.savePhoto(user.id,b64);onPhotoChange&&onPhotoChange(b64);showToast("Photo updated!","success");};
+              reader.readAsDataURL(file);
+            }}/>
+          </label>
+          <div style={{position:"absolute",bottom:0,left:0}}>{tick}</div>
         </div>
         <div style={{color:C.cream,fontSize:20,fontWeight:700}}>{user.en}</div>
         <div style={{color:C.gold,fontSize:16,direction:"rtl",fontFamily:"serif",marginTop:3}}>{user.name}</div>
@@ -1846,7 +2032,7 @@ function Profile({user,go,onRoleChange,showToast}){
 
       {/* Quick links */}
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:16}}>
-        {[["❤️ Health Profile","health"],["📜 Ledger","ledger"],["🖼️ My Card","card"]].map(([l,s])=>(
+        {[["❤️ Health Profile","health"],["📜 Ledger","ledger"],["🕌 Attendance","attendance"],["🖼️ My Card","card"]].map(([l,s])=>(
           <Btn key={l} fn={()=>go(s)} v="dark" s={{padding:12,fontSize:12}} ch={l}/>
         ))}
       </div>
@@ -2024,27 +2210,63 @@ function Admin({go,showToast}){
    SCREEN: MAP
 ══════════════════════════════════════════════════════ */
 function MapView({go}){
+  const [myLoc,setMyLoc]=useState(null);
+  const [locLoading,setLocLoading]=useState(false);
+  const [locErr,setLocErr]=useState("");
+  const jamaatLat=18.5204, jamaatLng=73.8567;
+
+  const getMyLocation=()=>{
+    setLocLoading(true);setLocErr("");
+    if(!navigator.geolocation){setLocErr("GPS not supported");setLocLoading(false);return;}
+    navigator.geolocation.getCurrentPosition(
+      pos=>{setMyLoc({lat:pos.coords.latitude.toFixed(4),lng:pos.coords.longitude.toFixed(4),acc:Math.round(pos.coords.accuracy)});setLocLoading(false);},
+      err=>{setLocErr("GPS access denied");setLocLoading(false);},
+      {enableHighAccuracy:true,timeout:10000}
+    );
+  };
+
   return(
     <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
       <BackBtn fn={()=>go("dashboard")} label="Dashboard"/>
       <div style={{padding:"14px 0 16px"}}>
         <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Live Map</div>
       </div>
-      <Cd s={{marginBottom:14,textAlign:"center",borderColor:C.green}}>
-        <div style={{background:C.surface,borderRadius:12,height:200,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",marginBottom:12,position:"relative",overflow:"hidden"}}>
-          <svg style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:.07}}><defs><pattern id="grid" x="0" y="0" width="30" height="30" patternUnits="userSpaceOnUse"><path d="M30 0L0 0 0 30" fill="none" stroke={C.gold} strokeWidth=".8"/></pattern></defs><rect width="100%" height="100%" fill="url(#grid)"/></svg>
-          <div style={{fontSize:40,marginBottom:6}}>📍</div>
-          <div style={{color:C.cream,fontSize:14,fontWeight:700}}>Pune Markaz</div>
-          <div style={{color:C.creamDi,fontSize:12}}>18.5204°N, 73.8567°E</div>
-          <div style={{color:C.txtDi,fontSize:11,marginTop:4}}>Last updated: 12 Apr, 6:30 PM</div>
+
+      {/* Jamaat Location - OpenStreetMap */}
+      <Cd s={{marginBottom:14,borderColor:C.green,padding:0,overflow:"hidden"}}>
+        <iframe
+          src={`https://www.openstreetmap.org/export/embed.html?bbox=${jamaatLng-0.05}%2C${jamaatLat-0.05}%2C${jamaatLng+0.05}%2C${jamaatLat+0.05}&layer=mapnik&marker=${jamaatLat}%2C${jamaatLng}`}
+          style={{width:"100%",height:220,border:"none",display:"block"}}
+          loading="lazy"
+        />
+        <div style={{padding:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div><div style={{color:C.cream,fontSize:14,fontWeight:700}}>Pune Markaz</div><div style={{color:C.txtDi,fontSize:11,marginTop:2}}>{jamaatLat}°N, {jamaatLng}°E</div></div>
+            <Bdg v="green" ch="🟢 Active"/>
+          </div>
+          <Btn fn={()=>window.open(`https://maps.google.com/?q=${jamaatLat},${jamaatLng}`,"_blank")} v="gold" s={{padding:10,fontSize:13}} ch="🗺️ Open Google Maps"/>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-          {[["Pincode","411001"],["State","Maharashtra"],["Members","6 active"],["Status","🟢 Active"]].map(([k,v])=>(
-            <div key={k}><div style={{color:C.txtDi,fontSize:10}}>{k.toUpperCase()}</div><div style={{color:C.cream,fontSize:12,fontWeight:600,marginTop:2}}>{v}</div></div>
-          ))}
-        </div>
-        <Btn fn={()=>window.open("https://maps.google.com/?q=Pune+Markaz+India","_blank")} v="gold" ch="🗺️ Open in Google Maps"/>
       </Cd>
+
+      {/* My Location */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:13,fontWeight:700,marginBottom:12}}>📍 My Current Location</div>
+        {myLoc?(
+          <>
+            <div style={{background:C.surface,borderRadius:8,padding:10,marginBottom:10}}>
+              <div style={{color:C.cream,fontSize:13,fontWeight:600}}>Lat: {myLoc.lat}° · Lng: {myLoc.lng}°</div>
+              <div style={{color:C.txtDi,fontSize:11,marginTop:3}}>Accuracy: ±{myLoc.acc}m</div>
+            </div>
+            <Btn fn={()=>window.open(`https://maps.google.com/?q=${myLoc.lat},${myLoc.lng}`,"_blank")} v="outline" s={{padding:10,fontSize:13}} ch="View My Location on Maps"/>
+          </>
+        ):(
+          <>
+            {locErr&&<div style={{color:C.redHi,fontSize:13,marginBottom:8}}>⚠ {locErr}</div>}
+            {locLoading?<Spinner/>:<Btn fn={getMyLocation} v="dark" s={{padding:12,fontSize:13}} ch="📡 Detect My GPS Location"/>}
+          </>
+        )}
+      </Cd>
+
       <Cd>
         <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>Nearby Jamaats</div>
         {[["Nashik Jamaat","Nashik Markaz","~85 km"],["Mumbai Jamaat","Dharavi Markaz","~148 km"]].map(([n,l,d])=>(
@@ -2095,45 +2317,83 @@ function AmalScreen({go,user}){
    SCREEN: ADD MEMBER
 ══════════════════════════════════════════════════════ */
 function AddMember({go,showToast}){
+  const [tab,setTab]=useState("search"); // search | manual
   const [q,setQ]=useState("");
   const [added,setAdded]=useState([]);
-  const results=q.length>=2?[
+  const [newName,setNewName]=useState("");
+  const [newPhone,setNewPhone]=useState("");
+  const [newCity,setNewCity]=useState("");
+  const [saving,setSaving]=useState(false);
+
+  const DEMO_USERS=[
     {id:"s1",en:"Yusuf Ibrahim",name:"یوسف ابراہیم",verified:true,city:"Pune",phone:"+91 90012 34567"},
     {id:"s2",en:"Hassan Ali",name:"حسن علی",verified:true,city:"Mumbai",phone:"+91 90098 76543"},
     {id:"s3",en:"Omar Farooq",name:"عمر فاروق",verified:false,city:"Nashik",phone:"+91 90011 22334"},
-  ].filter(r=>r.en.toLowerCase().includes(q.toLowerCase())||r.name.includes(q)):[];
+    {id:"s4",en:"Bilal Ahmed",name:"بلال احمد",verified:true,city:"Pune",phone:"+91 90022 11334"},
+  ];
+  const results=q.length>=2?DEMO_USERS.filter(r=>r.en.toLowerCase().includes(q.toLowerCase())):[];
 
-  const addMember=(m)=>{setAdded(p=>[...p,m.id]);showToast(`${m.en} added to Jamaat`,"success");};
+  const addMember=async(m)=>{
+    setAdded(p=>[...p,m.id]);
+    if(BACKEND_READY) await _sb.from("jamaat_members").upsert({jamaat_id:JAMAAT.id,user_id:m.id,user_name:m.en,user_phone:m.phone,city:m.city,joined_at:new Date().toISOString()});
+    showToast(`${m.en} added to Jamaat`,"success");
+  };
+
+  const addManual=async()=>{
+    if(newName.trim().length<2){showToast("Enter full name","error");return;}
+    if(newPhone.replace(/[^0-9]/g,"").length<10){showToast("Enter valid phone","error");return;}
+    setSaving(true);
+    if(BACKEND_READY) await _sb.from("jamaat_members").insert({jamaat_id:JAMAAT.id,user_name:newName.trim(),user_phone:newPhone.trim(),city:newCity.trim()||"India",joined_at:new Date().toISOString()});
+    setSaving(false);
+    showToast(`${newName} added to Jamaat!`,"success");
+    setNewName("");setNewPhone("");setNewCity("");
+  };
 
   return(
     <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
       <BackBtn fn={()=>go("jamaat")} label="Back to Jamaat"/>
-      <div style={{padding:"14px 0 18px"}}>
+      <div style={{padding:"14px 0 14px"}}>
         <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Add Member</div>
-        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Search Aadhaar-verified users by name</div>
+        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Search or add manually</div>
       </div>
-      <Inp label="" val={q} set={setQ} ph="Type name to search verified users…"/>
-      {results.length>0&&results.map(r=>(
-        <Cd key={r.id} s={{marginBottom:9,padding:13}}>
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-            <div style={{display:"flex",gap:10,alignItems:"center"}}>
-              <div style={{position:"relative"}}><Av name={r.en} size={40}/><div style={{position:"absolute",bottom:0,right:0}}>{r.verified?tick:null}</div></div>
-              <div>
-                <div style={{color:C.cream,fontSize:13,fontWeight:700}}>{r.en}</div>
-                <div style={{color:C.gold,fontSize:11,direction:"rtl",fontFamily:"serif"}}>{r.name}</div>
-                <div style={{color:C.txtDi,fontSize:11,marginTop:2}}>{r.city} · {r.verified?"✓ Aadhaar Verified":"Unverified"}</div>
+
+      <div style={{display:"flex",background:C.surface,borderRadius:12,padding:4,marginBottom:16,gap:3}}>
+        {[["search","🔍 Search"],["manual","➕ Add Manually"]].map(([t,l])=>(
+          <button key={t} onClick={()=>setTab(t)} style={{flex:1,padding:"9px 4px",borderRadius:9,border:"none",background:tab===t?C.gold:"transparent",color:tab===t?C.bg:C.creamDi,fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",transition:"all .2s"}}>{l}</button>
+        ))}
+      </div>
+
+      {tab==="search"&&(
+        <>
+          <Inp label="" val={q} set={setQ} ph="Type name to search…"/>
+          {results.map(r=>(
+            <Cd key={r.id} s={{marginBottom:9,padding:13}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                <div style={{display:"flex",gap:10,alignItems:"center"}}>
+                  <Av name={r.en} size={40}/>
+                  <div>
+                    <div style={{color:C.cream,fontSize:13,fontWeight:700}}>{r.en}</div>
+                    <div style={{color:C.txtDi,fontSize:11,marginTop:2}}>{r.city} · {r.verified?"✓ Verified":"Unverified"}</div>
+                  </div>
+                </div>
+                {added.includes(r.id)?<Bdg v="green" ch="✓ Added"/>:
+                  <Btn fn={()=>addMember(r)} v={r.verified?"gold":"outline"} s={{width:"auto",padding:"8px 14px",fontSize:12}} ch="+ Add"/>}
               </div>
-            </div>
-            {added.includes(r.id)?(
-              <Bdg v="green" ch="✓ Added"/>
-            ):(
-              <Btn fn={()=>addMember(r)} v={r.verified?"gold":"outline"} s={{width:"auto",padding:"8px 14px",fontSize:12}} ch={r.verified?"+ Add":"Invite"}/>
-            )}
-          </div>
-        </Cd>
-      ))}
-      {q.length<2&&<div style={{textAlign:"center",color:C.txtDi,fontSize:13,padding:20}}>Type at least 2 characters to search</div>}
-      {q.length>=2&&results.length===0&&<div style={{textAlign:"center",color:C.txtDi,fontSize:13,padding:20}}>No verified users found for "{q}"</div>}
+            </Cd>
+          ))}
+          {q.length<2&&<div style={{textAlign:"center",color:C.txtDi,fontSize:13,padding:20}}>Type 2+ characters to search</div>}
+          {q.length>=2&&results.length===0&&<div style={{textAlign:"center",color:C.txtDi,fontSize:13,padding:20}}>No users found</div>}
+        </>
+      )}
+
+      {tab==="manual"&&(
+        <>
+          <Inp label="Full Name *" val={newName} set={setNewName} ph="e.g. Mohammed Ahmed"/>
+          <Inp label="Mobile Number *" val={newPhone} set={setNewPhone} ph="+91 98765 43210" type="tel" kb="tel"/>
+          <Inp label="City" val={newCity} set={setNewCity} ph="e.g. Mumbai"/>
+          {saving?<Spinner/>:<Btn fn={addManual} v="gold" ch="➕ Add to Jamaat"/>}
+        </>
+      )}
     </div>
   );
 }
@@ -2141,6 +2401,221 @@ function AddMember({go,showToast}){
 /* ══════════════════════════════════════════════════════
    BOTTOM NAV + SOS BUTTON
 ══════════════════════════════════════════════════════ */
+
+
+/* ══════════════════════════════════════════════════════
+   SCREEN: ATTENDANCE SYSTEM (Feature 10)
+══════════════════════════════════════════════════════ */
+function AttendanceScreen({user,go,showToast}){
+  const prayers=["Fajr","Ishraq","Zuhr","Asr","Maghrib","Isha"];
+  const prayerUrdu={"Fajr":"فجر","Ishraq":"اشراق","Zuhr":"ظہر","Asr":"عصر","Maghrib":"مغرب","Isha":"عشاء"};
+  const today=new Date().toISOString().split("T")[0];
+  const [selDate,setSelDate]=useState(today);
+  const [att,setAtt]=useState({});
+  const [saving,setSaving]=useState(false);
+  const [history,setHistory]=useState([]);
+
+  useEffect(()=>{
+    DB.getAttendance(user.id,selDate).then(d=>setAtt(d||{}));
+    DB.getAttendanceHistory(user.id,7).then(setHistory);
+  },[selDate,user.id]);
+
+  const toggle=(p)=>setAtt(a=>({...a,[p]:!a[p]}));
+
+  const save=async()=>{
+    setSaving(true);
+    await DB.saveAttendance(user.id,selDate,att);
+    setSaving(false);
+    showToast("Attendance saved!","success");
+    DB.getAttendanceHistory(user.id,7).then(setHistory);
+  };
+
+  const doneCount=prayers.filter(p=>att[p]).length;
+  const score=Math.round((doneCount/prayers.length)*100);
+
+  const weekDays=history.map(h=>{
+    const d=new Date(h.date);
+    const count=prayers.filter(p=>h[p]).length;
+    return {date:h.date,day:d.toLocaleDateString("en",{weekday:"short"}),count};
+  }).reverse();
+
+  return(
+    <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
+      <BackBtn fn={()=>go("dashboard")} label="Dashboard"/>
+      <div style={{padding:"14px 0 16px",display:"flex",justifyContent:"space-between",alignItems:"flex-end"}}>
+        <div>
+          <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>نماز حاضری</div>
+          <div style={{color:C.cream,fontSize:20,fontWeight:800}}>Namaz Attendance</div>
+        </div>
+        <div style={{textAlign:"right"}}>
+          <div style={{color:C.gold,fontSize:28,fontWeight:900}}>{score}%</div>
+          <div style={{color:C.txtDi,fontSize:10}}>Today</div>
+        </div>
+      </div>
+
+      {/* Date selector */}
+      <Cd s={{marginBottom:14,padding:10}}>
+        <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:4}}>
+          {weekDays.map(d=>(
+            <button key={d.date} onClick={()=>setSelDate(d.date)} style={{flexShrink:0,padding:"8px 10px",borderRadius:10,border:`1.5px solid ${selDate===d.date?C.gold:C.border}`,background:selDate===d.date?C.goldDim:C.surface,cursor:"pointer",fontFamily:"inherit",textAlign:"center",minWidth:50}}>
+              <div style={{color:selDate===d.date?C.goldHi:C.creamDi,fontSize:10}}>{d.day}</div>
+              <div style={{color:selDate===d.date?C.gold:C.txtDi,fontSize:18,marginTop:3}}>{d.count>0?d.count===6?"⭐":d.count+"/"+"6":"○"}</div>
+            </button>
+          ))}
+        </div>
+      </Cd>
+
+      {/* Prayer Checklist */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:13,fontWeight:700,marginBottom:14,display:"flex",justifyContent:"space-between"}}>
+          <span>نماز چیک لسٹ</span>
+          <span style={{color:C.creamDi,fontSize:12}}>{doneCount}/{prayers.length} prayers</span>
+        </div>
+        {prayers.map((p,i)=>(
+          <div key={p} onClick={()=>toggle(p)}
+            style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 0",borderTop:i?`1px solid ${C.border}`:"none",cursor:"pointer",userSelect:"none"}}>
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <div style={{width:28,height:28,borderRadius:8,border:`2px solid ${att[p]?C.greenBr:C.borderBr}`,background:att[p]?C.green:"transparent",display:"flex",alignItems:"center",justifyContent:"center",transition:"all .2s",flexShrink:0}}>
+                {att[p]&&<svg width="14" height="14" viewBox="0 0 14 14"><path d="M2.5 7L6 10.5L11.5 4" stroke="#fff" strokeWidth="2" strokeLinecap="round"/></svg>}
+              </div>
+              <div>
+                <div style={{color:att[p]?C.cream:C.creamDi,fontSize:14,fontWeight:600}}>{p}</div>
+                <div style={{color:C.txtDi,fontSize:11,marginTop:1}}>{JAMAAT.amal.find(a=>a.actEn.includes(p.slice(0,3)))||JAMAAT.amal[i]?JAMAAT.amal[Math.min(i,JAMAAT.amal.length-1)].en:""}</div>
+              </div>
+            </div>
+            <div style={{color:C.gold,fontSize:20,direction:"rtl",fontFamily:"serif"}}>{prayerUrdu[p]}</div>
+          </div>
+        ))}
+      </Cd>
+
+      {/* Weekly bar */}
+      <Cd s={{marginBottom:14}}>
+        <div style={{color:C.gold,fontSize:12,fontWeight:700,marginBottom:12}}>📊 Weekly Overview</div>
+        <div style={{display:"flex",gap:6,alignItems:"flex-end",height:60}}>
+          {weekDays.map(d=>(
+            <div key={d.date} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:4}}>
+              <div style={{width:"100%",background:`linear-gradient(180deg,${d.count>=5?C.greenBr:d.count>=3?C.gold:C.border},${d.count>0?C.green:C.border})`,borderRadius:"4px 4px 0 0",height:d.count?(d.count/6)*50:4,transition:"height .3s",minHeight:4}}/>
+              <div style={{color:C.txtDi,fontSize:9}}>{d.day}</div>
+            </div>
+          ))}
+        </div>
+      </Cd>
+
+      {saving?<Spinner/>:<Btn fn={save} v="gold" ch="💾 Save Today's Attendance"/>}
+    </div>
+  );
+}
+
+/* ══════════════════════════════════════════════════════
+   SCREEN: QR SCANNER (Feature 7)
+══════════════════════════════════════════════════════ */
+function QRScanner({go,showToast}){
+  const [scanning,setScanning]=useState(false);
+  const [result,setResult]=useState(null);
+  const [error,setError]=useState("");
+  const videoRef=useRef();
+  const canvasRef=useRef();
+  const streamRef=useRef();
+  const animRef=useRef();
+
+  const startScan=async()=>{
+    setError("");setResult(null);
+    try{
+      const stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+      streamRef.current=stream;
+      videoRef.current.srcObject=stream;
+      videoRef.current.play();
+      setScanning(true);
+      requestAnimationFrame(tick);
+    }catch(e){setError("Camera access denied. Please allow camera.");}
+  };
+
+  const tick=()=>{
+    const video=videoRef.current;
+    const canvas=canvasRef.current;
+    if(!video||!canvas||!video.readyState===4){animRef.current=requestAnimationFrame(tick);return;}
+    canvas.height=video.videoHeight;canvas.width=video.videoWidth;
+    const ctx=canvas.getContext("2d");
+    ctx.drawImage(video,0,0,canvas.width,canvas.height);
+    const imageData=ctx.getImageData(0,0,canvas.width,canvas.height);
+    const code=typeof jsQR!=="undefined"?jsQR(imageData.data,imageData.width,imageData.height,{inversionAttempts:"dontInvert"}):null;
+    if(code){
+      stopScan();
+      setResult(code.data);
+      processQR(code.data);
+    }else{
+      animRef.current=requestAnimationFrame(tick);
+    }
+  };
+
+  const stopScan=()=>{
+    if(streamRef.current) streamRef.current.getTracks().forEach(t=>t.stop());
+    if(animRef.current) cancelAnimationFrame(animRef.current);
+    setScanning(false);
+  };
+
+  const processQR=(data)=>{
+    if(data.startsWith("JAMAT:REG:")){
+      const parts=data.split(":");
+      showToast("✓ Valid JAMAT QR Code — Entry Confirmed!","success");
+      DB.logNotification({type:"qr_scan",sender_name:"Scanner",message:`QR scanned: ${data}`,channel:"app",lang:"en"});
+    }else if(data.startsWith("JAMAT-CARD:")){
+      showToast("✓ Valid Member Card Scanned!","success");
+    }else{
+      showToast("QR scanned: "+data.slice(0,30),"info");
+    }
+  };
+
+  useEffect(()=>()=>{stopScan();},[]);
+
+  return(
+    <div style={{padding:"20px 14px 100px",maxWidth:460,margin:"0 auto"}}>
+      <BackBtn fn={()=>{stopScan();go("dashboard");}} label="Dashboard"/>
+      <div style={{padding:"14px 0 16px"}}>
+        <div style={{color:C.gold,fontSize:12,direction:"rtl",marginBottom:2}}>QR اسکینر</div>
+        <div style={{color:C.cream,fontSize:20,fontWeight:800}}>QR Code Scanner</div>
+        <div style={{color:C.txtDi,fontSize:12,marginTop:3}}>Event entry ke liye QR scan karo</div>
+      </div>
+
+      {/* Camera View */}
+      <Cd s={{marginBottom:14,padding:0,overflow:"hidden",position:"relative"}}>
+        <video ref={videoRef} style={{width:"100%",height:260,objectFit:"cover",display:scanning?"block":"none",background:"#000"}} playsInline muted/>
+        <canvas ref={canvasRef} style={{display:"none"}}/>
+        {!scanning&&(
+          <div style={{height:260,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",background:C.surface,gap:12}}>
+            <div style={{fontSize:56}}>📷</div>
+            <div style={{color:C.creamDi,fontSize:14}}>Camera yahan dikhega</div>
+          </div>
+        )}
+        {scanning&&(
+          <div style={{position:"absolute",top:"50%",left:"50%",transform:"translate(-50%,-50%)",width:180,height:180,border:"3px solid "+C.gold,borderRadius:12,pointerEvents:"none"}}>
+            <div style={{position:"absolute",top:-3,left:-3,width:24,height:24,borderTop:"4px solid "+C.gold,borderLeft:"4px solid "+C.gold,borderRadius:"4px 0 0 0"}}/>
+            <div style={{position:"absolute",top:-3,right:-3,width:24,height:24,borderTop:"4px solid "+C.gold,borderRight:"4px solid "+C.gold,borderRadius:"0 4px 0 0"}}/>
+            <div style={{position:"absolute",bottom:-3,left:-3,width:24,height:24,borderBottom:"4px solid "+C.gold,borderLeft:"4px solid "+C.gold,borderRadius:"0 0 0 4px"}}/>
+            <div style={{position:"absolute",bottom:-3,right:-3,width:24,height:24,borderBottom:"4px solid "+C.gold,borderRight:"4px solid "+C.gold,borderRadius:"0 0 4px 0"}}/>
+          </div>
+        )}
+      </Cd>
+
+      {error&&<Cd s={{marginBottom:14,borderColor:C.red,background:C.redBg}}><div style={{color:C.redHi,fontSize:13}}>{error}</div></Cd>}
+
+      {result&&(
+        <Cd s={{marginBottom:14,borderColor:C.greenBr,background:"#041808"}}>
+          <div style={{color:C.greenBr,fontSize:14,fontWeight:700,marginBottom:6}}>✓ QR Scanned!</div>
+          <div style={{color:C.creamDi,fontSize:11,fontFamily:"monospace",wordBreak:"break-all"}}>{result}</div>
+          <Btn fn={()=>setResult(null)} v="outline" s={{marginTop:12,padding:10,fontSize:13}} ch="Scan Another"/>
+        </Cd>
+      )}
+
+      {!scanning?(
+        <Btn fn={startScan} v="gold" ch="📷 Start Camera Scan"/>
+      ):(
+        <Btn fn={stopScan} v="danger" ch="⏹ Stop Scanning"/>
+      )}
+    </div>
+  );
+}
+
 /* ══════════════════════════════════════════════════════
    SCREEN: SUPABASE SETUP GUIDE
 ══════════════════════════════════════════════════════ */
@@ -2161,6 +2636,61 @@ function SetupScreen({go,showToast}){
   };
 
   const SQL=`-- Run this in Supabase SQL Editor
+-- New tables for v2 features:
+
+-- User accounts (real login)
+CREATE TABLE IF NOT EXISTS users_app (
+  id TEXT PRIMARY KEY,
+  en TEXT, name TEXT, phone TEXT UNIQUE,
+  city TEXT, role TEXT DEFAULT 'member',
+  blood_group TEXT, photo TEXT,
+  verified BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Event registrations (permanent)
+CREATE TABLE IF NOT EXISTS event_registrations (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT, event_id TEXT,
+  registered_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, event_id)
+);
+
+-- Namaz attendance
+CREATE TABLE IF NOT EXISTS attendance (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id TEXT, date TEXT,
+  "Fajr" BOOLEAN DEFAULT false,
+  "Ishraq" BOOLEAN DEFAULT false,
+  "Zuhr" BOOLEAN DEFAULT false,
+  "Asr" BOOLEAN DEFAULT false,
+  "Maghrib" BOOLEAN DEFAULT false,
+  "Isha" BOOLEAN DEFAULT false,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE(user_id, date)
+);
+
+-- Jamaat members (real)
+CREATE TABLE IF NOT EXISTS jamaat_members (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  jamaat_id TEXT, user_id TEXT, user_name TEXT,
+  user_phone TEXT, city TEXT,
+  joined_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- Enable RLS for all
+ALTER TABLE users_app ENABLE ROW LEVEL SECURITY;
+ALTER TABLE event_registrations ENABLE ROW LEVEL SECURITY;
+ALTER TABLE attendance ENABLE ROW LEVEL SECURITY;
+ALTER TABLE jamaat_members ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY "open" ON users_app FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "open" ON event_registrations FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "open" ON attendance FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "open" ON jamaat_members FOR ALL USING (true) WITH CHECK (true);
+
+-- ══════════════════════════════════════════════════════
+-- Original tables (if not already created):
 
 -- 1. Blacklisted identities
 CREATE TABLE blacklisted_identities (
@@ -2341,10 +2871,13 @@ function OfflineBanner(){
 function App(){
   const [phase,setPhase]=useState("splash");
   const [user,setUser]=useState(null);
+  const [darkMode,setDarkMode]=useState(getTheme()==="dark");
+  const [userPhoto,setUserPhoto]=useState(null);
   const [screen,setScreen]=useState("dashboard");
   const [selEvt,setSelEvt]=useState(null);
   const [showSOS,setShowSOS]=useState(false);
   const [events,setEvents]=useState(EVENTS_INIT);
+  const [regsLoaded,setRegsLoaded]=useState(false);
   const [ledger,setLedger]=useState(LEDGER_INIT);
   const [toast,setToast]=useState(null);
   const online=useOnline();
@@ -2379,8 +2912,20 @@ function App(){
     if(s!=="eventDetail")setSelEvt(null);
   },[]);
 
-  const handleLogin=(u)=>{setUser(u);setPhase("tc");};
+  const handleLogin=(u)=>{setUser(u);setPhase("tc");setUserPhoto(DB.getPhoto(u.id));};
   const handleTC=()=>setPhase(user.family?"app":"family");
+  // Load saved event registrations
+  useEffect(()=>{
+    if(user&&!regsLoaded){
+      DB.getMyRegistrations(user.id).then(regIds=>{
+        if(regIds&&regIds.length>0){
+          setEvents(prev=>prev.map(e=>regIds.includes(e.id)?{...e,mine:"registered"}:e));
+        }
+        setRegsLoaded(true);
+      });
+    }
+  },[user,regsLoaded]);
+
   const handleFamily=async(fam)=>{
     const updatedUser={...user,family:fam};
     setUser(updatedUser);
@@ -2394,7 +2939,8 @@ function App(){
   };
   const handleRoleChange=(u)=>{setUser(u);go("dashboard");};
 
-  const handleRegister=(evId)=>{
+  const handleRegister=async(evId)=>{
+    await DB.registerEvent(user?.id||"demo", evId);
     setEvents(prev=>prev.map(e=>e.id===evId?{...e,mine:"registered",reg:e.reg+1}:e));
     if(selEvt?.id===evId)setSelEvt(p=>({...p,mine:"registered",reg:p.reg+1}));
     const ev=events.find(e=>e.id===evId);
@@ -2412,7 +2958,7 @@ function App(){
   if(phase==="family")return <FamilySetup user={user} onDone={handleFamily}/>;
   if(showSOS)return <SOS user={user} onBack={()=>setShowSOS(false)}/>;
 
-  const noNav=["qr","location","broadcast","sos"].includes(screen);
+  const noNav=["qr","location","broadcast","sos","qrscan"].includes(screen);
 
   const renderScreen=()=>{
     if(screen==="jamaat")return <JamaatScreen user={user} go={go} showToast={showToast}/>;
@@ -2420,7 +2966,9 @@ function App(){
     if(screen==="eventDetail"&&selEvt)return <EventDetail ev={selEvt} user={user} onBack={()=>go("events")} onQR={()=>go("qr")} onRegister={handleRegister}/>;
     if(screen==="qr")return <QRPass user={user} ev={selEvt||events.find(e=>e.mine==="registered")||events[0]} onBack={()=>go(selEvt?"eventDetail":"dashboard")}/>;
     if(screen==="ledger")return <Ledger user={user} go={go} ledger={ledger}/>;
-    if(screen==="profile")return <Profile user={user} go={go} onRoleChange={handleRoleChange} showToast={showToast}/>;
+    if(screen==="profile")return <Profile user={user} go={go} onRoleChange={handleRoleChange} showToast={showToast} onPhotoChange={p=>{setUserPhoto(p);}}/>;
+    if(screen==="qrscan")return <QRScanner go={go} showToast={showToast}/>;
+    if(screen==="attendance")return <AttendanceScreen user={user} go={go} showToast={showToast}/>;
     if(screen==="location")return <LocationUpdate user={user} go={go} showToast={showToast}/>;
     if(screen==="card")return <DigitalCard user={user} go={go}/>;
     if(screen==="map")return <MapView go={go}/>;
@@ -2446,10 +2994,13 @@ function App(){
           </div>
           <div style={{display:"flex",gap:9,alignItems:"center"}}>
             {!online&&<span style={{fontSize:14}}>📡</span>}
+            <button onClick={()=>{const t=getTheme()==="dark"?"light":"dark";setTheme(t);setDarkMode(t==="dark");}} style={{background:"none",border:"none",fontSize:18,cursor:"pointer",padding:2}} title="Toggle Theme">
+              {darkMode?"🌙":"☀️"}
+            </button>
             <Bdg v={user.role==="amir"?"gold":user.role==="state_admin"?"red":"green"}
               ch={user.role==="amir"?"Amir":user.role==="state_admin"?"Admin":"Member"}/>
-            <div onClick={()=>go("profile")} style={{width:30,height:30,borderRadius:"50%",border:`1.5px solid ${C.gold}`,background:`linear-gradient(135deg,${C.green},${C.teal})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:C.cream,cursor:"pointer"}}>
-              {user.en[0]}
+            <div onClick={()=>go("profile")} style={{width:30,height:30,borderRadius:"50%",border:`1.5px solid ${C.gold}`,background:userPhoto?`url(${userPhoto}) center/cover`:`linear-gradient(135deg,${C.green},${C.teal})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:700,color:C.cream,cursor:"pointer"}}>
+              {!userPhoto&&user.en[0]}
             </div>
           </div>
         </div>
