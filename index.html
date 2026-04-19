@@ -18,6 +18,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *{box-sizing:border-box;margin:0;padding:0}
@@ -1021,55 +1022,24 @@ const QRComp = ({
   data,
   sz = 160
 }) => {
-  const h = data.split("").reduce((a, c) => (a << 5) - a + c.charCodeAt(0), 0) >>> 0;
-  const N = 21,
-    cell = sz / N;
-  const fin = [[0, 0], [0, 14], [14, 0]];
-  const isFin = (r, c) => fin.some(([fr, fc]) => r >= fr && r < fr + 7 && c >= fc && c < fc + 7);
-  const on = (r, c) => {
-    const s = fin.some(([fr, fc]) => r >= fr + 2 && r < fr + 5 && c >= fc + 2 && c < fc + 5);
-    return s || !isFin(r, c) && (h * r * 31 + c * 17 + r * c * 7) % 11 < 5;
-  };
-  return /*#__PURE__*/React.createElement("svg", {
+  const canvasRef = React.useRef();
+  React.useEffect(() => {
+    if (!canvasRef.current) return;
+    if (typeof QRCode !== "undefined") {
+      QRCode.toCanvas(canvasRef.current, data, {
+        width: sz,
+        margin: 2,
+        color: { dark: "#060e09", light: "#ffffff" },
+        errorCorrectionLevel: "M"
+      }, err => { if(err) console.warn("QR error:", err); });
+    }
+  }, [data, sz]);
+  return React.createElement("canvas", {
+    ref: canvasRef,
     width: sz,
     height: sz,
-    viewBox: `0 0 ${sz} ${sz}`
-  }, /*#__PURE__*/React.createElement("rect", {
-    width: sz,
-    height: sz,
-    fill: "#fff"
-  }), fin.map(([fr, fc]) => /*#__PURE__*/React.createElement("g", {
-    key: `${fr}-${fc}`
-  }, /*#__PURE__*/React.createElement("rect", {
-    x: fc * cell,
-    y: fr * cell,
-    width: 7 * cell,
-    height: 7 * cell,
-    fill: C.bg
-  }), /*#__PURE__*/React.createElement("rect", {
-    x: (fc + 1) * cell,
-    y: (fr + 1) * cell,
-    width: 5 * cell,
-    height: 5 * cell,
-    fill: "#fff"
-  }), /*#__PURE__*/React.createElement("rect", {
-    x: (fc + 2) * cell,
-    y: (fr + 2) * cell,
-    width: 3 * cell,
-    height: 3 * cell,
-    fill: C.bg
-  }))), Array.from({
-    length: N
-  }, (_, r) => Array.from({
-    length: N
-  }, (_, c) => !isFin(r, c) && on(r, c) ? /*#__PURE__*/React.createElement("rect", {
-    key: `${r}-${c}`,
-    x: c * cell,
-    y: r * cell,
-    width: cell,
-    height: cell,
-    fill: C.bg
-  }) : null)));
+    style: { borderRadius: 8, display: "block" }
+  });
 };
 
 /* Toast notification system */
@@ -10060,7 +10030,12 @@ function App() {
     setUser(u);
     setPhase("tc");
   };
-  const handleTC = () => setPhase(user.family ? "app" : "family");
+  const handleTC = () => {
+  const firstTime = !localStorage.getItem("jamat_welcomed");
+  if (!user.family) { setPhase("family"); }
+  else if (firstTime) { localStorage.setItem("jamat_welcomed","1"); setPhase("app"); setScreen("welcome"); }
+  else { setPhase("app"); }
+};
   const handleFamily = async fam => {
     const updatedUser = {
       ...user,
