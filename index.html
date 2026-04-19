@@ -376,6 +376,21 @@ const USERS = {
     bloodGroup: "B+",
     hasMedical: false,
     family: null
+  },
+  developer: {
+    id: "dev1",
+    name: "\u0646\u0648\u0631 \u0645\u062D\u0645\u062F",
+    en: "Noor Mohammad",
+    role: "developer",
+    verified: true,
+    state: "UP",
+    district: "Bahraich",
+    pincode: "271801",
+    phone: "+91 99187 17288",
+    lang: "ur",
+    bloodGroup: "O+",
+    hasMedical: false,
+    family: null
   }
 };
 const JAMAAT = {
@@ -1408,7 +1423,7 @@ function Login({
       display: "flex",
       gap: 8
     }
-  }, [["member", "👤 Member"], ["amir", "🏛️ Amir"], ["admin", "⚙️ Admin"]].map(([r, l]) => /*#__PURE__*/React.createElement("button", {
+  }, [["member", "👤 Member"], ["amir", "🏛️ Amir"], ["admin", "⚙️ Admin"], ["developer", "🛠️ Dev"]].map(([r, l]) => /*#__PURE__*/React.createElement("button", {
     key: r,
     onClick: () => setDemo(r),
     style: {
@@ -2009,7 +2024,8 @@ function Dashboard({
   onArrived
 }) {
   const isAmir = user.role === "amir";
-  const isAdmin = user.role === "state_admin";
+  const isAdmin = user.role === "state_admin" || user.role === "developer";
+  const isDev = user.role === "developer";
   const [arrivedLoading, setArrivedLoading] = useState(false);
   const [arrivedDone, setArrivedDone] = useState(false);
   const stats = isAdmin ? [["47", "Jamaats", "🧭"], ["12,483", "Users", "👥"], ["3", "Events", "🎪"], ["0", "SOS Today", "🆘"]] : isAmir ? [["6", "Members", "👥"], ["8", "Days Active", "📅"], ["94", "Amir Score", "⭐"], [`${events.filter(e => e.mine).length}`, "My Events", "🎪"]] : [[`${LEDGER_INIT.filter(l => l.type === "jamaat").length}`, "Jamaats", "🧭"], [`${LEDGER_INIT.filter(l => l.type === "event").length}`, "Events", "🎪"], ["97", "Days Total", "📅"], ["—", "Amir Score", "⭐"]];
@@ -5279,7 +5295,7 @@ function Admin({
       fontSize: 20,
       fontWeight: 800
     }
-  }, "Maharashtra Admin"), /*#__PURE__*/React.createElement("div", {
+  }, isDev ? "🛠️ Developer — Full Access" : "Maharashtra Admin"), /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 6,
       display: "flex",
@@ -8006,7 +8022,7 @@ function IslamicScreen({
       background: `linear-gradient(${C.goldHi},${C.gold})`,
       borderRadius: 2,
       transformOrigin: "bottom center",
-      transform: `rotate(${((qibla === null || qibla === void 0 ? void 0 : qibla.bearing) || 292) - 180}deg)`,
+      transform: `rotate(${(qibla === null || qibla === void 0 ? void 0 : qibla.bearing) || 292}deg)`,
       bottom: "50%",
       left: "calc(50% - 2px)",
       boxShadow: `0 0 8px ${C.gold}`
@@ -9527,20 +9543,7 @@ function CreateJamaatScreen({
       fontSize: 56,
       marginBottom: 12
     }
-  }, "\uD83D\uDD4C"), /*#__PURE__*/React.createElement("div", {
-    style: {
-      color: C.greenBr,
-      fontSize: 20,
-      fontWeight: 700
-    }
-  }, "Jamaat Created!"), /*#__PURE__*/React.createElement(Btn, {
-    fn: () => go("jamaatList"),
-    v: "gold",
-    s: {
-      marginTop: 20
-    },
-    ch: "View All Jamaats"
-  })));
+  }, "\uD83D\uDD4C"), React.createElement("div", {style:{color:C.greenBr,fontSize:22,fontWeight:700,marginBottom:4}}, "\u2705 Jamaat Bana Di Gayi!"), React.createElement("div", {style:{color:C.creamDi,fontSize:13,marginTop:4,marginBottom:16}}, "\u0622\u067E \u06A9\u06CC \u062C\u0645\u0627\u0639\u062A \u06A9\u0627\u0645\u06CC\u0627\u0628\u06CC \u0633\u06D2 \u0628\u0646 \u06AF\u0626\u06CC \u06C1\u06D2"), React.createElement("div", {style:{background:C.surface,border:"1px solid "+C.gold,borderRadius:12,padding:14,marginBottom:16,textAlign:"left"}}, [["Name",name],["Amir",amir],["Departure",dep],["Location",loc],["Pincode",pin]].map(function(ref){var k=ref[0],v=ref[1];return React.createElement("div",{key:k,style:{display:"flex",justifyContent:"space-between",padding:"7px 0",borderBottom:"1px solid "+C.border}},React.createElement("span",{style:{color:C.creamDi,fontSize:12}},k),React.createElement("span",{style:{color:C.cream,fontSize:12,fontWeight:600}},v));})), React.createElement(Btn, {fn: () => go("jamaatList"), v: "gold", s:{padding:14,fontSize:14}, ch: "\uD83C\uDFD8\uFE0F View All Jamaats \u2192"}), React.createElement("div", {style:{marginTop:10,textAlign:"center"}}, React.createElement("button", {onClick:()=>go("dashboard"), style:{background:"none",border:"none",color:C.creamDi,fontSize:12,cursor:"pointer",fontFamily:"inherit"}}, "Back to Dashboard"))));
   return /*#__PURE__*/React.createElement("div", {
     style: {
       padding: "20px 14px 100px",
@@ -9866,6 +9869,61 @@ function SOSHistoryScreen({
     }
   }, (l.message || "").slice(0, 80)))))));
 }
+
+function DevToolsScreen({go, user, showToast}) {
+  const clearAll = () => {
+    const keep = ["jamat_welcomed"];
+    Object.keys(localStorage).forEach(k => { if(!keep.includes(k)) localStorage.removeItem(k); });
+    showToast("All local data cleared!", "success");
+    setTimeout(() => window.location.reload(), 1200);
+  };
+  const clearJamaats = () => { localStorage.removeItem("jamat_jamaats"); showToast("Jamaats cleared", "success"); };
+  const clearFamily = () => { localStorage.removeItem("jamat_fam_dev1"); showToast("Family contacts cleared", "success"); };
+  const resetWelcome = () => { localStorage.removeItem("jamat_welcomed"); showToast("Welcome screen reset — logout & login to see it", "info"); };
+  
+  const sections = [
+    {title:"📊 Current Storage", items: Object.keys(localStorage).filter(k=>k.startsWith("jamat_")).map(k=>({k,v:localStorage.getItem(k)?.slice(0,40)}))},
+  ];
+
+  return React.createElement("div", {style:{padding:"20px 14px 100px", maxWidth:460, margin:"0 auto"}},
+    React.createElement(BackBtn, {fn:()=>go("admin"), label:"Admin"}),
+    React.createElement("div", {style:{padding:"14px 0 16px"}},
+      React.createElement("div", {style:{color:C.gold, fontSize:12, marginBottom:2}}, "🛠️ Developer Tools"),
+      React.createElement("div", {style:{color:C.cream, fontSize:22, fontWeight:800}}, "Dev Panel"),
+      React.createElement("div", {style:{color:C.txtDi, fontSize:12, marginTop:3}}, "Noor Mohammad — Full System Access")
+    ),
+    React.createElement(Cd, {s:{marginBottom:14, borderColor:C.red, background:C.redBg}},
+      React.createElement("div", {style:{color:C.redHi, fontSize:12, fontWeight:700, marginBottom:8}}, "⚠️ Destructive Actions"),
+      React.createElement("div", {style:{display:"flex", flexDirection:"column", gap:8}},
+        React.createElement(Btn, {fn:clearJamaats, v:"danger", s:{padding:11,fontSize:13}, ch:"🗑️ Clear All Jamaats (localStorage)"}),
+        React.createElement(Btn, {fn:clearFamily, v:"danger", s:{padding:11,fontSize:13}, ch:"🗑️ Clear Family Contacts"}),
+        React.createElement(Btn, {fn:resetWelcome, v:"amber", s:{padding:11,fontSize:13}, ch:"🔄 Reset Welcome Screen"}),
+        React.createElement(Btn, {fn:clearAll, v:"danger", s:{padding:11,fontSize:13}, ch:"💥 Clear ALL App Data (Full Reset)"})
+      )
+    ),
+    React.createElement(Cd, {s:{marginBottom:14}},
+      React.createElement("div", {style:{color:C.gold, fontSize:12, fontWeight:700, marginBottom:10}}, "📦 localStorage Keys"),
+      Object.keys(localStorage).filter(k=>k.startsWith("jamat_")).length === 0
+        ? React.createElement("div", {style:{color:C.txtDi, fontSize:12}}, "No JAMAT data stored")
+        : Object.keys(localStorage).filter(k=>k.startsWith("jamat_")).map(k =>
+            React.createElement("div", {key:k, style:{display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:"1px solid "+C.border}},
+              React.createElement("span", {style:{color:C.creamDi, fontSize:11, fontFamily:"monospace"}}, k),
+              React.createElement("span", {style:{color:C.txtDi, fontSize:10}}, (localStorage.getItem(k)||"").slice(0,20)+"...")
+            )
+          )
+    ),
+    React.createElement(Cd, {s:{borderColor:C.teal}},
+      React.createElement("div", {style:{color:C.tealHi, fontSize:12, fontWeight:700, marginBottom:6}}, "ℹ️ App Info"),
+      [["Developer","Noor Mohammad"],["Phone","9918717288"],["Supabase","xpkfagerukqbvzgpqsmj"],["Version","v4.0"]].map(([k,v]) =>
+        React.createElement("div", {key:k, style:{display:"flex", justifyContent:"space-between", padding:"6px 0", borderBottom:"1px solid "+C.border}},
+          React.createElement("span", {style:{color:C.creamDi, fontSize:12}}, k),
+          React.createElement("span", {style:{color:C.cream, fontSize:12, fontWeight:600}}, v)
+        )
+      )
+    )
+  );
+}
+
 function BottomNav({
   active,
   go
@@ -10241,7 +10299,13 @@ function App() {
     });
     if (screen === "admin") return /*#__PURE__*/React.createElement(Admin, {
       go: go,
-      showToast: showToast
+      showToast: showToast,
+      isDev: isDev
+    });
+    if (screen === "devtools") return /*#__PURE__*/React.createElement(DevToolsScreen, {
+      go: go,
+      showToast: showToast,
+      user: user
     });
     if (screen === "setup") return /*#__PURE__*/React.createElement(SetupScreen, {
       go: go,
