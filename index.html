@@ -1443,9 +1443,9 @@ function QRPass({user,ev,onBack}){
 </script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
+// hooks from script 1
 
-const { useState, useEffect, useRef, useCallback } = React;
+// hooks from script 1
 function SOS({user,onBack}){
   const [phase,setPhase]=useState("idle");
   const [cd,setCd]=useState(3);
@@ -2280,7 +2280,7 @@ CREATE POLICY "public_all" ON notification_logs FOR ALL USING (true) WITH CHECK 
 </script>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useRef, useCallback } = React;
+// hooks from script 1
 function JamaatWelcomeScreen({go,onSkip}){
   const [mounted,setMounted]=React.useState(false);
   React.useEffect(()=>{setTimeout(()=>setMounted(true),50);},[]);
